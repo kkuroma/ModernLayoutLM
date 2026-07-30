@@ -16,14 +16,18 @@ zero_init_2d = true                        # start numerically identical to the 
 
 # Stage 1: layout-aware masked language modelling.
 [Pretrain]
-datasets = ["pubtables1m", "doclaynet"]
+datasets = ["pubtables", "doclaynet"]
 max_length = 512
 mlm_probability = 0.3                      # ModernBERT's own recipe, not BERT's 0.15
 learning_rate = 5e-5                       # pretrained backbone
 layout_learning_rate = 1e-3                # fresh 2D tables, they start from zero
 weight_decay = 0.01
 warmup_ratio = 0.05
-epochs = 3
+# Measured at 54 sequences/second on the 3090: sdpa, no flash-attn, and ModernBERT's sliding
+# window loses its advantage without it. The corpus is 528k pages, about 1.41M chunks at 512
+# tokens, so one epoch is roughly 7 hours. One pass over all of it beats three over a third.
+epochs = 1
+# 13.2GB peak at 16. Raising it to 24 costs 18.7GB and buys 5%, since the step is compute bound.
 batch_size = 16
 grad_accum = 4
 save_total_limit = 3
