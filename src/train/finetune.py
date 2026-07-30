@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import json
 import logging
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass, field, replace
 from pathlib import Path
 from typing import Any, cast
 
@@ -115,6 +115,7 @@ def finetune(
     Raises:
         ValueError: If the dataset's task is not supported for fine-tuning.
     """
+    config = _clamp_length(spec, config)
     tokenizer = AutoTokenizer.from_pretrained(spec.tokenizer_name or spec.backbone)
     processor = ModernLayoutLmProcessor(
         tokenizer=tokenizer,
@@ -134,12 +135,7 @@ def finetune(
         splits = {name: _zero_boxes(dataset) for name, dataset in splits.items()}
 
     model = _build_model(spec, meta)
-    groups = build_param_groups(
-        model=model,
-        learning_rate=config.learning_rate,
-        layout_learning_rate=config.layout_learning_rate,
-        weight_decay=config.weight_decay,
-    )
+    groups = _param_groups(model, config)
     logger.info("parameter groups:\n%s", describe_param_groups(groups))
 
     eval_split = "validation" if "validation" in splits else FALLBACK_EVAL_SPLIT
@@ -172,9 +168,100 @@ def finetune(
     return result
 
 
+# The original LayoutLM has learned absolute position embeddings capped at 512. ModernLayoutLM
+# uses RoPE and has no such limit, which is one of the things the comparison is measuring.
+LAYOUTLM_MAX_LENGTH = 512
+
+
+def _clamp_length(spec: RunSpec, config: FinetuneConfig) -> FinetuneConfig:
+    """
+    Caps the sequence length for a baseline that cannot go as long as ours
+
+    LayoutLM v1 has learned absolute position embeddings and hard-fails past 512 tokens. Rather
+    than let the run crash deep inside the embedding lookup, the length is clamped here and the
+    difference is logged, since it is part of what the comparison is measuring.
+
+    Args:
+        spec: The run being set up.
+        config: The requested hyperparameters.
+
+    Returns:
+        The config, with max_length reduced if the backbone requires it.
+    """
+    if not is_layoutlm_baseline(spec.backbone) or config.max_length <= LAYOUTLM_MAX_LENGTH:
+        return config
+    logger.warning(
+        "clamping max_length %d to %d for the LayoutLM baseline, which cannot go longer",
+        config.max_length,
+        LAYOUTLM_MAX_LENGTH,
+    )
+    return replace(config, max_length=LAYOUTLM_MAX_LENGTH)
+
+
+def is_layoutlm_baseline(backbone: str) -> bool:
+    """
+    Reports whether a backbone is the original LayoutLM rather than our graft
+
+    Args:
+        backbone: Path or hub id of the weights.
+
+    Returns:
+        True when the weights are a `layoutlm` checkpoint.
+    """
+    return "layoutlm-" in backbone.lower() or backbone.lower().endswith("layoutlm")
+
+
+def _param_groups(model: Any, config: FinetuneConfig) -> list[dict[str, Any]]:
+    """
+    Builds parameter groups, tolerating a baseline model that has no layout tables
+
+    `build_param_groups` refuses a model without `LayoutEmbedding` tables on purpose, since that
+    is how a run misconfigured against a plain ModernBERT gets caught. The LayoutLM baseline is
+    the one legitimate exception: its 2D embeddings are pretrained, not freshly grafted, so they
+    belong on the backbone rate anyway.
+
+    Args:
+        model: The model to optimize.
+        config: Hyperparameters for this task.
+
+    Returns:
+        Parameter groups ready for AdamW.
+    """
+    try:
+        return build_param_groups(
+            model=model,
+            learning_rate=config.learning_rate,
+            layout_learning_rate=config.layout_learning_rate,
+            weight_decay=config.weight_decay,
+        )
+    except ValueError:
+        if not is_layoutlm_baseline(str(getattr(model.config, "_name_or_path", ""))):
+            raise
+        decayed = [p for n, p in model.named_parameters() if p.requires_grad and "bias" not in n]
+        undecayed = [p for n, p in model.named_parameters() if p.requires_grad and "bias" in n]
+        return [
+            {
+                "params": decayed,
+                "lr": config.learning_rate,
+                "weight_decay": config.weight_decay,
+                "name": "backbone",
+            },
+            {
+                "params": undecayed,
+                "lr": config.learning_rate,
+                "weight_decay": 0.0,
+                "name": "no_decay",
+            },
+        ]
+
+
 def _build_model(spec: RunSpec, meta: DatasetMeta) -> Any:
     """
     Constructs the head appropriate to the dataset's task
+
+    A LayoutLM backbone builds transformers' own LayoutLM classes instead of ours. Its forward
+    already accepts `bbox` on the same 0-1000 convention, so the processed data and the processor
+    are shared with our runs, which is what makes the comparison ours rather than cross-paper.
 
     Args:
         spec: The run being set up.
@@ -183,11 +270,17 @@ def _build_model(spec: RunSpec, meta: DatasetMeta) -> Any:
     Returns:
         An initialized model with a fresh classification head.
     """
+    label_kwargs = {
+        "num_labels": len(meta.label_names),
+        "id2label": dict(enumerate(meta.label_names)),
+        "label2id": {name: index for index, name in enumerate(meta.label_names)},
+    }
+    if is_layoutlm_baseline(spec.backbone):
+        return _build_layoutlm(spec, meta, label_kwargs)
+
     model_config = ModernLayoutLmConfig.from_pretrained(
         spec.backbone,
-        num_labels=len(meta.label_names),
-        id2label=dict(enumerate(meta.label_names)),
-        label2id={name: index for index, name in enumerate(meta.label_names)},
+        **label_kwargs,
         # ModernBERT enables its own torch.compile path on CUDA by default, which makes triton
         # shell out to /sbin/ldconfig. That does not exist on NixOS. Disabled here rather than in
         # the config class, because it is a property of this machine and not of the architecture.
@@ -199,6 +292,31 @@ def _build_model(spec: RunSpec, meta: DatasetMeta) -> Any:
         else ModernLayoutLmForSequenceClassification
     )
     return head.from_pretrained(spec.backbone, config=model_config)
+
+
+def _build_layoutlm(spec: RunSpec, meta: DatasetMeta, label_kwargs: dict[str, Any]) -> Any:
+    """
+    Builds the original LayoutLM with the head this task needs
+
+    Args:
+        spec: The run being set up.
+        meta: The dataset metadata.
+        label_kwargs: num_labels and the label maps.
+
+    Returns:
+        An initialized LayoutLM model.
+    """
+    from transformers import (
+        LayoutLMForSequenceClassification,
+        LayoutLMForTokenClassification,
+    )
+
+    head = (
+        LayoutLMForTokenClassification
+        if meta.task == "token"
+        else LayoutLMForSequenceClassification
+    )
+    return head.from_pretrained(spec.backbone, **label_kwargs)
 
 
 def _training_args(config: FinetuneConfig, output_dir: Path, seed: int) -> TrainingArguments:
