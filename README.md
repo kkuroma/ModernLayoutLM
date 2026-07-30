@@ -56,16 +56,15 @@ in the pipeline needs OCR. See `src/data/README.md` if that ever changes.
 
 ```sh
 # 1. pull the backbone and the small downstream datasets
-uv run python scripts/data/download_raw.py --group downstream
-uv run python scripts/data/build_downstream.py
+uv run python scripts/data/build_datasets.py --group downstream
 
-# 2. the layout-MLM corpus, ~46GB of downloads
-uv run python scripts/data/download_raw.py --group pretrain
-uv run python scripts/data/build_pretrain.py
+# 2. the layout-MLM corpus. ~7GB, not the 130GB the sources nominally weigh:
+#    PubTables skips its image tarballs and DocLayNet is read with column projection
+uv run python scripts/data/build_datasets.py --group pretrain
 
 # 3. layout-aware MLM, then downstream SFT
-uv run python scripts/train/pretrain_mlm.py
-uv run python scripts/train/finetune_token.py --dataset funsd
+uv run python scripts/train/pretrain.py
+uv run python scripts/train/finetune.py --dataset funsd
 
 # 4. score everything and export
 uv run python scripts/eval/evaluate.py

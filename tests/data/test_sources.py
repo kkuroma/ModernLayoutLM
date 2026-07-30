@@ -20,12 +20,21 @@ def test_every_source_exposes_the_interface() -> None:
 
 
 def test_every_source_declares_labels_matching_its_task() -> None:
-    """A token or sequence task without a label vocabulary cannot be scored."""
+    """
+    A scorable task needs a label vocabulary, and a pretraining corpus must not claim one
+
+    Pretraining corpora are exempt because MVLM predicts tokens, not labels. Asserting both
+    directions catches a corpus mislabelled as a task, which would otherwise fail much later
+    inside the Trainer.
+    """
     for name, source in SOURCES.items():
         meta = source.describe()
         assert meta.source == name
         assert meta.task in {"token", "sequence", "pretrain"}
-        assert meta.label_names, name
+        if meta.task == "pretrain":
+            assert not meta.label_names, name
+        else:
+            assert meta.label_names, name
 
 
 def test_groups_only_name_registered_sources() -> None:

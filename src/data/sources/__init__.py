@@ -16,7 +16,7 @@ from collections.abc import Callable, Iterator
 from typing import Protocol
 
 from ..schema import DatasetMeta, Document
-from . import cord, funsd, rvlcdip, sroie
+from . import cord, doclaynet, funsd, pubtables, rvlcdip, sroie
 
 
 class Source(Protocol):
@@ -32,6 +32,8 @@ SOURCES: dict[str, Source] = {
     "cord": cord,  # type: ignore[dict-item]
     "sroie": sroie,  # type: ignore[dict-item]
     "rvlcdip": rvlcdip,  # type: ignore[dict-item]
+    "pubtables": pubtables,  # type: ignore[dict-item]
+    "doclaynet": doclaynet,  # type: ignore[dict-item]
 }
 
 # Groups the scripts expose as `--group`, so a caller need not spell out every name.
@@ -39,6 +41,7 @@ GROUPS = {
     "downstream": ["funsd", "cord", "sroie", "rvlcdip"],
     "token": ["funsd", "cord", "sroie"],
     "sequence": ["rvlcdip"],
+    "pretrain": ["pubtables", "doclaynet"],
 }
 
 

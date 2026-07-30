@@ -90,8 +90,8 @@ in a separate py3.13 virtualenv writing canonical parquet, not in this dependenc
 ## Running
 
 ```sh
-uv run python scripts/data/build_downstream.py --group token
-uv run python scripts/data/build_downstream.py --dataset rvlcdip
+uv run python scripts/data/build_datasets.py --group token
+uv run python scripts/data/build_datasets.py --dataset rvlcdip
 uv run python scripts/data/inspect_dataset.py --dataset cord --render scratchpad/cord.png
 ```
 

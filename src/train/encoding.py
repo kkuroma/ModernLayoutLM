@@ -43,7 +43,7 @@ def load_split(processed_dir: Path, name: str, split: str) -> Dataset:
     if not shards:
         raise FileNotFoundError(
             f"No parquet in {processed_dir / name / split}. "
-            f"Run scripts/data/build_downstream.py first."
+            f"Run scripts/data/build_datasets.py first."
         )
     return load_dataset("parquet", data_files=[str(path) for path in shards], split="train")
 

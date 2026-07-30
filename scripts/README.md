@@ -19,8 +19,8 @@ scripts/
 Every script takes its defaults from `config.toml` and accepts flags to override them.
 
 ```sh
-uv run python scripts/data/download_raw.py --group downstream
-uv run python scripts/train/finetune_token.py --dataset funsd
+uv run python scripts/data/build_datasets.py --group downstream
+uv run python scripts/train/finetune.py --dataset funsd
 uv run python scripts/eval/evaluate.py
 ```
 

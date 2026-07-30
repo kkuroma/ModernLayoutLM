@@ -1,12 +1,14 @@
 """
-Builds the downstream datasets into canonical parquet
+Builds any registered dataset into canonical parquet
 
-Downloads on demand through the Hugging Face cache, normalizes, validates, and writes
-`data/processed/<name>/<split>/*.parquet` plus a label sidecar.
+Downloads on demand, normalizes, validates, and writes `data/processed/<name>/<split>/*.parquet`
+plus a label sidecar. Drives the downstream tasks and the pretraining corpora alike, since every
+adapter exposes the same two functions.
 
-    uv run python scripts/data/build_downstream.py
-    uv run python scripts/data/build_downstream.py --dataset funsd cord
-    uv run python scripts/data/build_downstream.py --group token --limit 20
+    uv run python scripts/data/build_datasets.py --group downstream
+    uv run python scripts/data/build_datasets.py --group pretrain
+    uv run python scripts/data/build_datasets.py --dataset funsd cord
+    uv run python scripts/data/build_datasets.py --group token --limit 20
 """
 
 from __future__ import annotations
