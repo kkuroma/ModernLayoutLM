@@ -1,0 +1,55 @@
+# Where things live. `data` is a symlink to the vault, `models` is local disk.
+[Paths]
+raw_dir = "data/raw"                      # datasets exactly as downloaded, untouched
+processed_dir = "data/processed"           # canonical parquet, our schema
+checkpoint_dir = "data/checkpoints"        # intermediate training checkpoints, on the vault
+backbone_dir = "models/backbones"          # pulled upstream weights
+export_dir = "models/exports"              # final HF-format models
+report_dir = "notebooks/results"           # evaluation tables
+
+# The backbone and the layout embedding geometry.
+[Model]
+backbone = "answerdotai/ModernBERT-base"
+max_2d_position_embeddings = 1024          # coordinates are normalized to 0-1000
+coordinate_scale = 1000
+zero_init_2d = true                        # start numerically identical to the backbone
+
+# Stage 1: layout-aware masked language modelling.
+[Pretrain]
+datasets = ["pubtables1m", "doclaynet"]
+max_length = 512
+mlm_probability = 0.3                      # ModernBERT's own recipe, not BERT's 0.15
+learning_rate = 5e-5                       # pretrained backbone
+layout_learning_rate = 1e-3                # fresh 2D tables, they start from zero
+weight_decay = 0.01
+warmup_ratio = 0.05
+epochs = 3
+batch_size = 16
+grad_accum = 4
+save_total_limit = 3
+
+# Stage 2: downstream supervised fine-tuning.
+[Finetune]
+max_length = 1024
+learning_rate = 5e-5
+layout_learning_rate = 1e-4
+weight_decay = 0.01
+warmup_ratio = 0.1
+epochs = 20
+batch_size = 8
+grad_accum = 2
+label_all_subwords = false                 # label the first subword, -100 on the rest
+
+# Per-task overrides. Small datasets need more epochs, RVL-CDIP needs far fewer.
+[Finetune.funsd]
+epochs = 30
+
+[Finetune.cord]
+epochs = 30
+
+[Finetune.sroie]
+epochs = 30
+
+[Finetune.rvlcdip]
+epochs = 3
+batch_size = 16

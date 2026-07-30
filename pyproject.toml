@@ -1,0 +1,81 @@
+[project]
+name = "modernlayoutlm"
+version = "0.1.0"
+description = "LayoutLM-style 2D layout embeddings on a ModernBERT backbone"
+requires-python = ">=3.14"
+dependencies = [
+    "accelerate>=1.0",
+    "datasets>=4.0",
+    "huggingface-hub>=0.30",
+    "numpy>=2.0",
+    "pillow>=11.0",
+    "pyarrow>=18.0",
+    "safetensors>=0.5",
+    "seqeval>=1.2.2",
+    "torch>=2.13",
+    "tqdm>=4.67",
+    "transformers>=5.14,<6",
+]
+
+# PaddleOCR is deliberately absent. `paddlepaddle` publishes no cp314 wheels, and declaring it
+# even as an extra makes the whole lockfile unresolvable. OCR backfill is a separate offline
+# tool, see `src/data/README.md`, and nothing in the main pipeline needs it.
+
+[dependency-groups]
+dev = [
+    "import-linter>=2.1",
+    "pytest>=8.3",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-m 'not slow and not gpu'"
+markers = [
+    "slow: takes more than a few seconds",
+    "gpu: requires a CUDA device",
+]
+
+[tool.ruff]
+line-length = 100
+target-version = "py314"
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "UP", "B", "ANN", "BLE"]
+ignore = ["ANN401"]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/*" = ["ANN"]
+"scratchpad/*" = ["ANN", "BLE", "E", "F"]
+
+[tool.black]
+line-length = 100
+target-version = ["py314"]
+
+[tool.pyright]
+include = ["src", "scripts", "tests"]
+exclude = ["scratchpad", "notebooks"]
+typeCheckingMode = "standard"
+pythonVersion = "3.14"
+venvPath = "."
+venv = ".venv"
+
+# Later stages import from earlier ones, never the reverse. Cycles are impossible.
+[tool.importlinter]
+root_package = "src"
+
+[[tool.importlinter.contracts]]
+name = "Pipeline stages are layered"
+type = "layers"
+layers = [
+    "src.eval",
+    "src.train",
+    "src.model",
+    "src.data",
+]
