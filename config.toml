@@ -43,6 +43,7 @@ epochs = 20
 batch_size = 8
 grad_accum = 2
 label_all_subwords = false                 # label the first subword, -100 on the rest
+max_train_pages = 0                        # 0 means use everything
 
 # Per-task overrides. Small datasets need more epochs, RVL-CDIP needs far fewer.
 [Finetune.funsd]
@@ -54,6 +55,11 @@ epochs = 30
 [Finetune.sroie]
 epochs = 30
 
+# RVL-CDIP is 308k pages. Four ablation variants over all of it is roughly 14 GPU hours, which
+# buys precision on a number that is already not comparable to published results, since the OCR
+# here is EasyOCR rather than the papers' Tesseract. Subsampled to a fixed 40k pages, identical
+# across every variant, so the comparison between them stays honest.
 [Finetune.rvlcdip]
 epochs = 3
 batch_size = 16
+max_train_pages = 40000

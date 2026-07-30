@@ -127,6 +127,7 @@ def finetune(
         processor=processor,
         max_length=config.max_length,
         num_proc=num_proc,
+        max_train_pages=config.max_train_pages,
     )
     if meta.task not in {"token", "sequence"}:
         raise ValueError(f"{spec.task} has task {meta.task!r}, which is not fine-tunable")

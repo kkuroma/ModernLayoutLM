@@ -138,6 +138,8 @@ def prepare_task_splits(
     max_length: int,
     stride: int = DEFAULT_STRIDE,
     num_proc: int | None = None,
+    max_train_pages: int | None = None,
+    seed: int = 42,
 ) -> tuple[dict[str, Dataset], DatasetMeta]:
     """
     Loads and tokenizes every split of one downstream dataset
@@ -149,6 +151,10 @@ def prepare_task_splits(
         max_length: Tokens per chunk.
         stride: Token overlap between chunks.
         num_proc: Worker processes for tokenization.
+        max_train_pages: Cap on training pages, applied before tokenizing so the cap bounds the
+            tokenization cost too. Evaluation splits are never capped. The subsample is a fixed
+            shuffle, so every ablation variant sees exactly the same pages.
+        seed: Seed for that subsample.
 
     Returns:
         A mapping from split name to tokenized dataset, plus the dataset metadata.
@@ -157,6 +163,8 @@ def prepare_task_splits(
     splits: dict[str, Dataset] = {}
     for split in meta.splits:
         raw = load_split(processed_dir, name, split)
+        if split == "train" and max_train_pages is not None and max_train_pages < len(raw):
+            raw = raw.shuffle(seed=seed).select(range(max_train_pages))
         splits[split] = tokenize_split(
             dataset=raw,
             processor=processor,

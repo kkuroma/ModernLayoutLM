@@ -76,6 +76,7 @@ class FinetuneConfig:
     batch_size: int
     grad_accum: int
     label_all_subwords: bool
+    max_train_pages: int | None = None
 
 
 @dataclass(frozen=True)
@@ -107,6 +108,9 @@ class Config:
         known = {f.name for f in fields(FinetuneConfig)}
         merged = {f.name: getattr(self.finetune, f.name) for f in fields(FinetuneConfig)}
         merged.update({k: v for k, v in overrides.items() if k in known})
+        # `0` reads better than an absent key in the toml, and means "no cap".
+        if not merged.get("max_train_pages"):
+            merged["max_train_pages"] = None
         return FinetuneConfig(**merged)
 
 
