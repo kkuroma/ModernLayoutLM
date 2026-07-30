@@ -51,8 +51,8 @@ select = ["E", "F", "W", "I", "UP", "B", "ANN", "BLE"]
 ignore = ["ANN401"]
 
 [tool.ruff.lint.per-file-ignores]
-"tests/*" = ["ANN"]
-"scratchpad/*" = ["ANN", "BLE", "E", "F"]
+"tests/**" = ["ANN"]
+"scratchpad/**" = ["ALL"]
 
 [tool.black]
 line-length = 100
@@ -60,7 +60,7 @@ target-version = ["py314"]
 
 [tool.pyright]
 include = ["src", "scripts", "tests"]
-exclude = ["scratchpad", "notebooks"]
+exclude = ["scratchpad", "notebooks", "**/__pycache__", ".venv"]
 typeCheckingMode = "standard"
 pythonVersion = "3.14"
 venvPath = "."
