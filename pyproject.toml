@@ -67,6 +67,8 @@ venvPath = "."
 venv = ".venv"
 
 # Later stages import from earlier ones, never the reverse. Cycles are impossible.
+# `src.eval` sits below `src.train` because scoring is a pure function of predictions and labels,
+# which training consumes for its own compute_metrics. Result reporting lives in scripts/eval.
 [tool.importlinter]
 root_package = "src"
 
@@ -74,8 +76,8 @@ root_package = "src"
 name = "Pipeline stages are layered"
 type = "layers"
 layers = [
-    "src.eval",
     "src.train",
+    "src.eval",
     "src.model",
     "src.data",
 ]

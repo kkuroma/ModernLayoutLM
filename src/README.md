@@ -10,11 +10,15 @@ A stage imports only from the stages below it. The `import-linter` layers contra
 ```
 src/
   config.py   typed access to config.toml, no stage of its own
-  data/       stage 1: acquire raw datasets, normalize to one canonical schema
-  model/      stage 2: config, modeling and processor. Self contained and exportable
-  train/      stage 3: collators, param groups, training loops
-  eval/       stage 4: metrics and result reporting
+  data/       acquire raw datasets, normalize to one canonical schema
+  model/      config, modeling and processor. Self contained and exportable
+  eval/       scoring: entity F1 and accuracy, pure functions of predictions and labels
+  train/      collators, param groups, training loops
 ```
+
+`eval` sits below `train`, not above it, because training needs the metrics for its own
+`compute_metrics` callback. Scoring is a pure function; it is the result *reporting* that comes
+last, and that lives in `scripts/eval/`.
 
 Nothing here reads a path or hyperparameter off disk. `scripts` loads `config.toml` via
 `src.config.load_config` and passes the values in as arguments.

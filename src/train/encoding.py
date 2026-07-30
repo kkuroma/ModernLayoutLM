@@ -1,0 +1,168 @@
+"""
+Turning canonical parquet into tokenized model inputs
+
+This is the first stage that may touch both `src.data` and `src.model`, so the processor lives
+here rather than in the data stage. Long pages are split into overlapping chunks, which is what
+lets a 1500-word receipt train at a 512 token limit without losing its tail.
+"""
+
+from __future__ import annotations
+
+from pathlib import Path
+from typing import Any
+
+from datasets import Dataset, load_dataset
+
+from src.data import DatasetMeta
+from src.model import ModernLayoutLmProcessor
+
+# Columns the model consumes. Everything else is dropped before training so that `Trainer` never
+# has to guess, and so a stray column cannot silently become a forward argument.
+MODEL_COLUMNS = ["input_ids", "attention_mask", "bbox", "labels"]
+
+# Token overlap between consecutive chunks of an over-length page.
+DEFAULT_STRIDE = 128
+
+
+def load_split(processed_dir: Path, name: str, split: str) -> Dataset:
+    """
+    Loads one split of a processed dataset from parquet
+
+    Args:
+        processed_dir: Root of the processed tree.
+        name: The dataset name.
+        split: The split name.
+
+    Returns:
+        The raw canonical dataset, untokenized.
+
+    Raises:
+        FileNotFoundError: If the split has no parquet shards.
+    """
+    shards = sorted((processed_dir / name / split).glob("*.parquet"))
+    if not shards:
+        raise FileNotFoundError(
+            f"No parquet in {processed_dir / name / split}. "
+            f"Run scripts/data/build_downstream.py first."
+        )
+    return load_dataset("parquet", data_files=[str(path) for path in shards], split="train")
+
+
+def read_meta(processed_dir: Path, name: str) -> DatasetMeta:
+    """
+    Reads a processed dataset's label sidecar
+
+    Args:
+        processed_dir: Root of the processed tree.
+        name: The dataset name.
+
+    Returns:
+        The dataset metadata.
+    """
+    return DatasetMeta.read(processed_dir / name)
+
+
+def tokenize_split(
+    dataset: Dataset,
+    processor: ModernLayoutLmProcessor,
+    task: str,
+    max_length: int,
+    stride: int = DEFAULT_STRIDE,
+    num_proc: int | None = None,
+) -> Dataset:
+    """
+    Tokenizes a canonical split into model inputs, chunking pages that overrun
+
+    A page longer than `max_length` becomes several rows. For token classification each chunk keeps
+    its own slice of the labels. For sequence classification every chunk inherits the page's label,
+    so a long document contributes several training examples and is scored per chunk.
+
+    Args:
+        dataset: A canonical split as loaded by `load_split`.
+        processor: The processor pairing a tokenizer with box alignment.
+        task: Either "token", "sequence" or "pretrain".
+        max_length: Tokens per chunk.
+        stride: Token overlap between consecutive chunks.
+        num_proc: Worker processes for the map, or None for one.
+
+    Returns:
+        A dataset whose columns are exactly `MODEL_COLUMNS`, minus labels for pretraining.
+
+    Raises:
+        ValueError: If `task` is not recognized.
+    """
+    if task not in {"token", "sequence", "pretrain"}:
+        raise ValueError(f"Unknown task {task!r}")
+
+    def encode(batch: dict[str, list[Any]]) -> dict[str, list[Any]]:
+        """Encodes one batch of canonical rows into chunked model inputs."""
+        word_labels = batch["word_labels"] if task == "token" else None
+        encoding = processor(
+            words=batch["words"],
+            boxes=batch["bboxes"],
+            word_labels=word_labels,
+            max_length=max_length,
+            padding="max_length",
+            truncation=True,
+            return_overflowing_tokens=True,
+            stride=stride,
+        )
+        result: dict[str, list[Any]] = {
+            "input_ids": encoding["input_ids"],
+            "attention_mask": encoding["attention_mask"],
+            "bbox": encoding["bbox"],
+        }
+        if task == "token":
+            result["labels"] = encoding["labels"]
+        elif task == "sequence":
+            # Every chunk of a page carries that page's label, so long pages contribute several
+            # examples rather than being truncated to their first 512 tokens.
+            mapping = encoding["overflow_to_sample_mapping"]
+            result["labels"] = [batch["doc_label"][index] for index in mapping]
+        return result
+
+    return dataset.map(
+        encode,
+        batched=True,
+        batch_size=16,
+        remove_columns=dataset.column_names,
+        num_proc=num_proc,
+        desc="tokenizing",
+    )
+
+
+def prepare_task_splits(
+    processed_dir: Path,
+    name: str,
+    processor: ModernLayoutLmProcessor,
+    max_length: int,
+    stride: int = DEFAULT_STRIDE,
+    num_proc: int | None = None,
+) -> tuple[dict[str, Dataset], DatasetMeta]:
+    """
+    Loads and tokenizes every split of one downstream dataset
+
+    Args:
+        processed_dir: Root of the processed tree.
+        name: The dataset name.
+        processor: The processor to encode with.
+        max_length: Tokens per chunk.
+        stride: Token overlap between chunks.
+        num_proc: Worker processes for tokenization.
+
+    Returns:
+        A mapping from split name to tokenized dataset, plus the dataset metadata.
+    """
+    meta = read_meta(processed_dir, name)
+    splits: dict[str, Dataset] = {}
+    for split in meta.splits:
+        raw = load_split(processed_dir, name, split)
+        splits[split] = tokenize_split(
+            dataset=raw,
+            processor=processor,
+            task=meta.task,
+            max_length=max_length,
+            stride=stride,
+            num_proc=num_proc,
+        )
+    return splits, meta
