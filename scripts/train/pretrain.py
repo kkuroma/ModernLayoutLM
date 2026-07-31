@@ -36,6 +36,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--max-steps", type=int, help="cap optimizer steps, for a probe")
     parser.add_argument("--num-proc", type=int, help="worker processes for tokenization")
     parser.add_argument("--seed", type=int, default=42, help="random seed")
+    parser.add_argument(
+        "--resume",
+        action="store_true",
+        help="continue from the newest checkpoint in the run directory",
+    )
     return parser.parse_args()
 
 
@@ -81,6 +86,7 @@ def main() -> int:
         num_proc=args.num_proc,
         max_pages=args.max_pages,
         max_steps=args.max_steps,
+        resume=args.resume,
     )
     print(f"\n{result.summary()}")
     print(f"written to {result.output_dir}")

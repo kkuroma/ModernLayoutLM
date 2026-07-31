@@ -74,6 +74,7 @@ def pretrain(
     num_proc: int | None = None,
     max_pages: int | None = None,
     max_steps: int | None = None,
+    resume: bool = False,
 ) -> PretrainResult:
     """
     Runs layout-aware MLM over one or more pretraining corpora
@@ -88,6 +89,8 @@ def pretrain(
         num_proc: Worker processes for tokenization.
         max_pages: Cap on pages per corpus, for a throughput probe.
         max_steps: Cap on optimizer steps, for a throughput probe.
+        resume: Continue from the newest checkpoint in `output_dir` when one exists. A multi-day
+            run will be interrupted, and without this an interruption costs the whole run.
 
     Returns:
         The run's result.
@@ -147,7 +150,12 @@ def pretrain(
         ),
         optimizers=(_adamw(groups), None),
     )
-    trainer.train()
+    checkpoint = _latest_checkpoint(output_dir) if resume else None
+    if resume and checkpoint is None:
+        logger.warning("resume requested but no checkpoint under %s; starting fresh", output_dir)
+    if checkpoint is not None:
+        logger.info("resuming from %s", checkpoint)
+    trainer.train(resume_from_checkpoint=checkpoint)
     metrics = trainer.evaluate(cast(Any, eval_dataset))
 
     trainer.save_model(str(output_dir))
@@ -268,3 +276,29 @@ def _adamw(groups: list[dict[str, Any]]) -> Any:
     from torch.optim import AdamW
 
     return AdamW([{k: v for k, v in group.items() if k != "name"} for group in groups])
+
+
+def _latest_checkpoint(output_dir: Path) -> str | None:
+    """
+    Finds the newest usable checkpoint in a run directory
+
+    Checks for the optimizer state rather than just the directory, because a checkpoint
+    interrupted mid-write would otherwise be picked and fail on load.
+
+    Args:
+        output_dir: The run's output directory.
+
+    Returns:
+        The checkpoint path, or None when there is nothing to resume from.
+    """
+    if not output_dir.is_dir():
+        return None
+    usable = [
+        path
+        for path in output_dir.glob("checkpoint-*")
+        if (path / "trainer_state.json").is_file() and (path / "optimizer.pt").is_file()
+    ]
+    if not usable:
+        return None
+    newest = max(usable, key=lambda path: int(path.name.split("-")[-1]))
+    return str(newest)
