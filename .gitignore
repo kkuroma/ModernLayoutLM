@@ -19,3 +19,6 @@ scratchpad/
 
 # Secrets
 .env
+
+# 232MB built wheel, not source
+/wheelhouse/
