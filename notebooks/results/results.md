@@ -27,6 +27,19 @@
 - does not beat layoutlm-base-uncased by -0.1683 f1
 - beats the same model without the layout-MLM stage by +0.1795 f1
 
+## rvlcdip
+
+| variant | accuracy | macro_f1 | loss | what it is |
+|---|---|---|---|---|
+| layout | 0.8422 | 0.8379 | 0.5756 | ModernLayoutLM: layout-MLM then fine-tune |
+| layoutlm | 0.8852 | 0.8750 | 0.4452 | microsoft/layoutlm-base-uncased, identical data |
+| skipmlm | 0.8315 | 0.8252 | 0.6390 | ours, fine-tuned straight off ModernBERT |
+| nobbox | 0.7348 | 0.7275 | 0.8548 | ours, boxes withheld at fine-tune time |
+
+- plain ModernBERT: not run
+- does not beat layoutlm-base-uncased by -0.0430 accuracy
+- beats the same model without the layout-MLM stage by +0.0107 accuracy
+
 ## sroie
 
 | variant | f1 | precision | recall | token_accuracy | loss | what it is |

@@ -171,6 +171,74 @@
     }
   },
   {
+    "task": "rvlcdip",
+    "variant": "layout",
+    "run_name": "rvlcdip-layout",
+    "backbone": "/home/kuroma/Documents/projects/nlp/ModernLayoutLM/data/checkpoints/pretrain-base",
+    "eval_split": "validation",
+    "train_examples": 43350,
+    "metrics": {
+      "loss": 0.575590193271637,
+      "accuracy": 0.842219311822836,
+      "macro_f1": 0.8379287200686618,
+      "runtime": 572.0134,
+      "samples_per_second": 73.416,
+      "steps_per_second": 2.295,
+      "epoch": 3.0
+    }
+  },
+  {
+    "task": "rvlcdip",
+    "variant": "layoutlm",
+    "run_name": "rvlcdip-layoutlm",
+    "backbone": "microsoft/layoutlm-base-uncased",
+    "eval_split": "validation",
+    "train_examples": 54145,
+    "metrics": {
+      "loss": 0.4451955258846283,
+      "accuracy": 0.8851813826146475,
+      "macro_f1": 0.8749621520568462,
+      "runtime": 290.4547,
+      "samples_per_second": 181.082,
+      "steps_per_second": 5.66,
+      "epoch": 3.0
+    }
+  },
+  {
+    "task": "rvlcdip",
+    "variant": "nobbox",
+    "run_name": "rvlcdip-nobbox",
+    "backbone": "/home/kuroma/Documents/projects/nlp/ModernLayoutLM/data/checkpoints/pretrain-base",
+    "eval_split": "validation",
+    "train_examples": 43350,
+    "metrics": {
+      "loss": 0.8547900915145874,
+      "accuracy": 0.7348493868317657,
+      "macro_f1": 0.7274605585170574,
+      "runtime": 562.5615,
+      "samples_per_second": 74.65,
+      "steps_per_second": 2.334,
+      "epoch": 3.0
+    }
+  },
+  {
+    "task": "rvlcdip",
+    "variant": "skipmlm",
+    "run_name": "rvlcdip-skipmlm",
+    "backbone": "/home/kuroma/Documents/projects/nlp/ModernLayoutLM/models/backbones/ModernBERT-base",
+    "eval_split": "validation",
+    "train_examples": 43350,
+    "metrics": {
+      "loss": 0.6389583349227905,
+      "accuracy": 0.8314799380878676,
+      "macro_f1": 0.8251825130184977,
+      "runtime": 571.7695,
+      "samples_per_second": 73.447,
+      "steps_per_second": 2.296,
+      "epoch": 3.0
+    }
+  },
+  {
     "task": "sroie",
     "variant": "layout",
     "run_name": "sroie-layout",
