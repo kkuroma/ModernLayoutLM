@@ -8,13 +8,18 @@ lets a 1500-word receipt train at a 512 token limit without losing its tail.
 
 from __future__ import annotations
 
+import logging
+from collections.abc import Iterable, Iterator, Mapping
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
-from datasets import Dataset, load_dataset
+from datasets import Dataset, load_dataset, load_from_disk
 
 from src.data import DatasetMeta
 from src.model import ModernLayoutLmProcessor
+from src.train.packing import pack_encodings
+
+logger = logging.getLogger(__name__)
 
 # Columns the model consumes. Everything else is dropped before training so that `Trainer` never
 # has to guess, and so a stray column cannot silently become a forward argument.
@@ -174,3 +179,84 @@ def prepare_task_splits(
             num_proc=num_proc,
         )
     return splits, meta
+
+
+def build_packed_corpus(
+    processed_dir: Path,
+    names: list[str],
+    split: str,
+    processor: ModernLayoutLmProcessor,
+    max_length: int,
+    cache_dir: Path,
+    num_proc: int | None = None,
+    max_pages: int | None = None,
+) -> Dataset:
+    """
+    Tokenizes and packs several pretraining corpora into one dataset, cached on disk
+
+    Packing removes the padding that otherwise dominates pretraining: at 1024 tokens a typical
+    page fills barely a third of the window. The result is cached because tokenizing tens of
+    millions of pages takes hours, and a multi-day run will be restarted more than once.
+
+    Args:
+        processed_dir: Root of the processed tree.
+        names: Corpus names to concatenate, in mixing order.
+        split: The split to build.
+        processor: The processor to encode with.
+        max_length: Target packed sequence length.
+        cache_dir: Where to store the packed arrow dataset.
+        num_proc: Worker processes for tokenization.
+        max_pages: Cap on pages per corpus, for probes.
+
+    Returns:
+        A dataset of `input_ids`, `attention_mask` and `bbox`, every row exactly `max_length` long.
+
+    Raises:
+        ValueError: If `names` is empty.
+    """
+    if not names:
+        raise ValueError("Packing needs at least one corpus")
+
+    key = f"packed-{split}-{max_length}-{'_'.join(names)}-{max_pages or 'all'}"
+    target = cache_dir / key
+    if (target / "dataset_info.json").is_file():
+        logger.info("reusing cached pack at %s", target)
+        return cast(Dataset, load_from_disk(str(target)))
+
+    separator = processor.tokenizer.sep_token_id
+    pad = processor.tokenizer.pad_token_id
+
+    def unpadded(batch: dict[str, list[Any]]) -> dict[str, list[Any]]:
+        """Encodes a batch of pages without padding, so packing sees their true lengths."""
+        encoding = processor(
+            words=batch["words"],
+            boxes=batch["bboxes"],
+            max_length=max_length,
+            padding=False,
+            truncation=True,
+        )
+        return {"input_ids": encoding["input_ids"], "bbox": encoding["bbox"]}
+
+    def stream() -> Iterator[dict[str, list[Any]]]:
+        """Yields packed sequences across every requested corpus in turn."""
+        for name in names:
+            raw = load_split(processed_dir, name, split)
+            if max_pages is not None and max_pages < len(raw):
+                raw = raw.select(range(max_pages))
+            tokenized = raw.map(
+                unpadded,
+                batched=True,
+                batch_size=64,
+                remove_columns=raw.column_names,
+                num_proc=num_proc,
+                desc=f"tokenizing {name}/{split}",
+            )
+            # Dataset iteration is typed as a union of mapping-like shapes; rows are dicts.
+            pages = cast(Iterable[Mapping[str, Any]], tokenized)
+            yield from pack_encodings(pages, max_length, separator, pad)
+
+    packed = Dataset.from_generator(stream)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    packed.save_to_disk(str(target))
+    logger.info("packed %d sequences into %s", len(packed), target)
+    return cast(Dataset, packed)

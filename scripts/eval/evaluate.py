@@ -31,6 +31,17 @@ HEADLINE = {
 # Column order in the rendered table, when the metric is present.
 COLUMNS = ["f1", "precision", "recall", "accuracy", "macro_f1", "token_accuracy", "loss"]
 
+# Row order, strongest claim first, so the table reads as an argument rather than a dump.
+VARIANT_ORDER = ["layout", "layoutlm", "skipmlm", "nobbox", "plain"]
+
+WHAT_EACH_VARIANT_IS = {
+    "layout": "ModernLayoutLM: layout-MLM then fine-tune",
+    "layoutlm": "microsoft/layoutlm-base-uncased, identical data",
+    "skipmlm": "ours, fine-tuned straight off ModernBERT",
+    "nobbox": "ours, boxes withheld at fine-tune time",
+    "plain": "plain ModernBERT: no layout-MLM, no boxes",
+}
+
 
 def parse_args() -> argparse.Namespace:
     """
@@ -82,43 +93,50 @@ def _collect(runs_dir: Path) -> list[dict[str, Any]]:
     Returns:
         Run records, each holding the task, variant, metrics and training size.
     """
-    results: list[dict[str, Any]] = []
+    newest: dict[tuple[str, str], tuple[float, dict[str, Any]]] = {}
     for path in sorted(runs_dir.glob("*/result.json")):
         payload = json.loads(path.read_text())
         spec = payload.get("spec", {})
-        results.append(
-            {
-                "task": spec.get("task", "unknown"),
-                "variant": _variant(spec),
-                "run_name": spec.get("run_name", path.parent.name),
-                "backbone": spec.get("backbone", ""),
-                "eval_split": payload.get("eval_split", ""),
-                "train_examples": payload.get("train_examples", 0),
-                "metrics": payload.get("metrics", {}),
-            }
-        )
-    return results
+        record = {
+            "task": spec.get("task", "unknown"),
+            "variant": _variant(spec),
+            "run_name": spec.get("run_name", path.parent.name),
+            "backbone": spec.get("backbone", ""),
+            "eval_split": payload.get("eval_split", ""),
+            "train_examples": payload.get("train_examples", 0),
+            "metrics": payload.get("metrics", {}),
+        }
+        key = (record["task"], record["variant"])
+        stamp = path.stat().st_mtime
+        if key not in newest or stamp > newest[key][0]:
+            newest[key] = (stamp, record)
+    return [record for _, record in newest.values()]
 
 
 def _variant(spec: dict[str, Any]) -> str:
     """
     Names the ablation variant a run represents
 
+    The LayoutLM check matches the checkpoint name, not the whole path. This project's directory
+    is called ModernLayoutLM, so a substring test against the full path calls every run a
+    LayoutLM baseline.
+
     Args:
         spec: The run's RunSpec as saved.
 
     Returns:
-        One of "nobbox", "layoutlm", "skipmlm" or "layout".
+        One of "layout", "nobbox", "skipmlm", "plain" or "layoutlm".
     """
-    if not spec.get("use_bbox", True):
-        return "nobbox"
     backbone = str(spec.get("backbone", ""))
-    if "layoutlm" in backbone.lower():
+    name = Path(backbone).name.lower()
+    if name.startswith("layoutlm"):
         return "layoutlm"
+
     # A run starting from the raw backbone never saw the layout-MLM stage.
-    if "pretrain" not in Path(backbone).name:
-        return "skipmlm"
-    return "layout"
+    pretrained = "pretrain" in name
+    if spec.get("use_bbox", True):
+        return "layout" if pretrained else "skipmlm"
+    return "nobbox" if pretrained else "plain"
 
 
 def _render(results: list[dict[str, Any]]) -> str:
@@ -141,16 +159,21 @@ def _render(results: list[dict[str, Any]]) -> str:
         ]
         lines.append(f"## {task}")
         lines.append("")
-        lines.append("| variant | " + " | ".join(present) + " | train chunks |")
+        lines.append("| variant | " + " | ".join(present) + " | what it is |")
         lines.append("|---" * (len(present) + 2) + "|")
-        for record in sorted(rows, key=lambda r: r["variant"]):
+        ordered = sorted(
+            rows,
+            key=lambda r: (
+                VARIANT_ORDER.index(r["variant"]) if r["variant"] in VARIANT_ORDER else 99
+            ),
+        )
+        for record in ordered:
             cells = [
                 f"{record['metrics'][column]:.4f}" if column in record["metrics"] else "-"
                 for column in present
             ]
-            lines.append(
-                f"| {record['variant']} | " + " | ".join(cells) + f" | {record['train_examples']} |"
-            )
+            note = WHAT_EACH_VARIANT_IS.get(record["variant"], "")
+            lines.append(f"| {record['variant']} | " + " | ".join(cells) + f" | {note} |")
         lines.append("")
         lines.extend(_verdict(task, rows))
         lines.append("")
@@ -183,7 +206,11 @@ def _verdict(task: str, rows: list[dict[str, Any]]) -> list[str]:
     score = layout["metrics"][metric]
 
     lines = []
-    for name, label in (("nobbox", "the no-bbox control"), ("layoutlm", "layoutlm-base-uncased")):
+    for name, label in (
+        ("plain", "plain ModernBERT"),
+        ("layoutlm", "layoutlm-base-uncased"),
+        ("skipmlm", "the same model without the layout-MLM stage"),
+    ):
         other = by_variant.get(name)
         if other is None or metric not in other["metrics"]:
             lines.append(f"- {label}: not run")

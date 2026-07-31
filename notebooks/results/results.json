@@ -1,0 +1,249 @@
+[
+  {
+    "task": "cord",
+    "variant": "layout",
+    "run_name": "cord-layout",
+    "backbone": "/home/kuroma/Documents/projects/nlp/ModernLayoutLM/data/checkpoints/pretrain-base",
+    "eval_split": "validation",
+    "train_examples": 800,
+    "metrics": {
+      "loss": 0.2582028806209564,
+      "precision": 0.9392712550607287,
+      "recall": 0.9515996718621821,
+      "f1": 0.9453952730236348,
+      "token_accuracy": 0.959743824336688,
+      "runtime": 1.5179,
+      "samples_per_second": 65.882,
+      "steps_per_second": 4.612,
+      "epoch": 30.0
+    }
+  },
+  {
+    "task": "cord",
+    "variant": "layoutlm",
+    "run_name": "cord-layoutlm",
+    "backbone": "microsoft/layoutlm-base-uncased",
+    "eval_split": "validation",
+    "train_examples": 800,
+    "metrics": {
+      "loss": 0.2016456425189972,
+      "precision": 0.9625407166123778,
+      "recall": 0.9696472518457753,
+      "f1": 0.9660809154066203,
+      "token_accuracy": 0.9720951509606587,
+      "runtime": 0.5474,
+      "samples_per_second": 182.675,
+      "steps_per_second": 12.787,
+      "epoch": 30.0
+    }
+  },
+  {
+    "task": "cord",
+    "variant": "nobbox",
+    "run_name": "cord-nobbox",
+    "backbone": "/home/kuroma/Documents/projects/nlp/ModernLayoutLM/data/checkpoints/pretrain-base",
+    "eval_split": "validation",
+    "train_examples": 800,
+    "metrics": {
+      "loss": 0.2483503222465515,
+      "precision": 0.9028662420382165,
+      "recall": 0.9302707136997539,
+      "f1": 0.9163636363636363,
+      "token_accuracy": 0.9478499542543458,
+      "runtime": 1.391,
+      "samples_per_second": 71.891,
+      "steps_per_second": 5.032,
+      "epoch": 30.0
+    }
+  },
+  {
+    "task": "cord",
+    "variant": "skipmlm",
+    "run_name": "cord-skipmlm",
+    "backbone": "/home/kuroma/Documents/projects/nlp/ModernLayoutLM/models/backbones/ModernBERT-base",
+    "eval_split": "validation",
+    "train_examples": 800,
+    "metrics": {
+      "loss": 0.2622121274471283,
+      "precision": 0.9282258064516129,
+      "recall": 0.9442165709598032,
+      "f1": 0.9361529076860513,
+      "token_accuracy": 0.9542543458371455,
+      "runtime": 1.5166,
+      "samples_per_second": 65.935,
+      "steps_per_second": 4.615,
+      "epoch": 30.0
+    }
+  },
+  {
+    "task": "funsd",
+    "variant": "layout",
+    "run_name": "funsd-layout",
+    "backbone": "/home/kuroma/Documents/projects/nlp/ModernLayoutLM/data/checkpoints/pretrain-base",
+    "eval_split": "test",
+    "train_examples": 149,
+    "metrics": {
+      "loss": 2.127767562866211,
+      "precision": 0.65754039497307,
+      "recall": 0.7332332332332332,
+      "f1": 0.6933270231897776,
+      "token_accuracy": 0.6605030435281957,
+      "runtime": 0.7003,
+      "samples_per_second": 71.4,
+      "steps_per_second": 5.712,
+      "epoch": 30.0
+    }
+  },
+  {
+    "task": "funsd",
+    "variant": "skipmlm",
+    "run_name": "funsd-skipmlm",
+    "backbone": "/home/kuroma/Documents/projects/nlp/ModernLayoutLM/models/backbones/ModernBERT-base",
+    "eval_split": "test",
+    "train_examples": 149,
+    "metrics": {
+      "loss": 2.3649652004241943,
+      "precision": 0.46339501206757844,
+      "recall": 0.5765765765765766,
+      "f1": 0.5138269402319358,
+      "token_accuracy": 0.6319053635006316,
+      "runtime": 0.7105,
+      "samples_per_second": 70.375,
+      "steps_per_second": 5.63,
+      "epoch": 30.0
+    }
+  },
+  {
+    "task": "funsd",
+    "variant": "layoutlm",
+    "run_name": "funsd-layoutlm",
+    "backbone": "microsoft/layoutlm-base-uncased",
+    "eval_split": "test",
+    "train_examples": 150,
+    "metrics": {
+      "loss": 1.1750941276550293,
+      "precision": 0.8503861003861004,
+      "recall": 0.8731417244796829,
+      "f1": 0.8616136919315404,
+      "token_accuracy": 0.790710751237067,
+      "runtime": 0.3072,
+      "samples_per_second": 169.295,
+      "steps_per_second": 13.023,
+      "epoch": 30.0
+    }
+  },
+  {
+    "task": "funsd",
+    "variant": "nobbox",
+    "run_name": "funsd-nobbox",
+    "backbone": "/home/kuroma/Documents/projects/nlp/ModernLayoutLM/data/checkpoints/pretrain-base",
+    "eval_split": "test",
+    "train_examples": 149,
+    "metrics": {
+      "loss": 1.3725156784057617,
+      "precision": 0.28012733060482037,
+      "recall": 0.3083083083083083,
+      "f1": 0.2935430069096974,
+      "token_accuracy": 0.4927070173423682,
+      "runtime": 0.7024,
+      "samples_per_second": 71.183,
+      "steps_per_second": 5.695,
+      "epoch": 30.0
+    }
+  },
+  {
+    "task": "funsd",
+    "variant": "plain",
+    "run_name": "funsd-nobbox-ModernBERT-base",
+    "backbone": "/home/kuroma/Documents/projects/nlp/ModernLayoutLM/models/backbones/ModernBERT-base",
+    "eval_split": "test",
+    "train_examples": 149,
+    "metrics": {
+      "loss": 1.900563359260559,
+      "precision": 0.4593939393939394,
+      "recall": 0.5690690690690691,
+      "f1": 0.5083836351441985,
+      "token_accuracy": 0.6274262087975192,
+      "runtime": 0.7187,
+      "samples_per_second": 69.573,
+      "steps_per_second": 5.566,
+      "epoch": 30.0
+    }
+  },
+  {
+    "task": "sroie",
+    "variant": "layout",
+    "run_name": "sroie-layout",
+    "backbone": "/home/kuroma/Documents/projects/nlp/ModernLayoutLM/data/checkpoints/pretrain-base",
+    "eval_split": "validation",
+    "train_examples": 594,
+    "metrics": {
+      "loss": 0.13700705766677856,
+      "precision": 0.8267716535433071,
+      "recall": 0.7835820895522388,
+      "f1": 0.8045977011494253,
+      "token_accuracy": 0.9835782195332757,
+      "runtime": 0.4545,
+      "samples_per_second": 70.411,
+      "steps_per_second": 4.401,
+      "epoch": 30.0
+    }
+  },
+  {
+    "task": "sroie",
+    "variant": "layoutlm",
+    "run_name": "sroie-layoutlm",
+    "backbone": "microsoft/layoutlm-base-uncased",
+    "eval_split": "validation",
+    "train_examples": 597,
+    "metrics": {
+      "loss": 0.09567905962467194,
+      "precision": 0.8161764705882353,
+      "recall": 0.8283582089552238,
+      "f1": 0.8222222222222222,
+      "token_accuracy": 0.9864592336502449,
+      "runtime": 0.1851,
+      "samples_per_second": 172.893,
+      "steps_per_second": 10.806,
+      "epoch": 30.0
+    }
+  },
+  {
+    "task": "sroie",
+    "variant": "nobbox",
+    "run_name": "sroie-nobbox",
+    "backbone": "/home/kuroma/Documents/projects/nlp/ModernLayoutLM/data/checkpoints/pretrain-base",
+    "eval_split": "validation",
+    "train_examples": 594,
+    "metrics": {
+      "loss": 0.10188525170087814,
+      "precision": 0.7795275590551181,
+      "recall": 0.7388059701492538,
+      "f1": 0.7586206896551724,
+      "token_accuracy": 0.9832901181215788,
+      "runtime": 0.4551,
+      "samples_per_second": 70.312,
+      "steps_per_second": 4.395,
+      "epoch": 30.0
+    }
+  },
+  {
+    "task": "sroie",
+    "variant": "skipmlm",
+    "run_name": "sroie-skipmlm",
+    "backbone": "/home/kuroma/Documents/projects/nlp/ModernLayoutLM/models/backbones/ModernBERT-base",
+    "eval_split": "validation",
+    "train_examples": 594,
+    "metrics": {
+      "loss": 0.10634734481573105,
+      "precision": 0.8174603174603174,
+      "recall": 0.7686567164179104,
+      "f1": 0.7923076923076923,
+      "token_accuracy": 0.9867473350619418,
+      "runtime": 0.4561,
+      "samples_per_second": 70.156,
+      "steps_per_second": 4.385,
+      "epoch": 30.0
+    }
+  }
+]
