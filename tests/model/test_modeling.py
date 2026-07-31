@@ -2,7 +2,7 @@
 Tests for the ModernBERT graft
 
 The load-bearing one is `test_zero_init_matches_modernbert`. Everything else about this project
-assumes the surgery left the backbone's pretrained behaviour intact, and that is the assertion
+assumes the surgery left the backbone's pretrained behavior intact, and that is the assertion
 which proves it.
 """
 

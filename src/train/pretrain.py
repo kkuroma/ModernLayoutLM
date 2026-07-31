@@ -1,5 +1,5 @@
 """
-Layout-aware masked language modelling
+Layout-aware masked language modeling
 
 The stage that makes the graft worth having. Fine-tuning alone leaves the zero-initialized layout
 tables with only a few hundred documents to learn from, and the FUNSD skip-MLM control confirms it:

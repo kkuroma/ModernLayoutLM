@@ -1,0 +1,91 @@
+"""
+Tests for the benchmark contamination filter
+
+FUNSD and RVL-CDIP descend from the same UCSF library as the IDL pretraining corpus, so their
+evaluation pages can appear in it verbatim. A filter that silently stopped matching would let that
+contamination back in while every count still looked plausible, so these tests pin the matching
+behavior rather than just the plumbing.
+"""
+
+from pathlib import Path
+
+from src.data.contamination import (
+    MIN_BATES_DIGITS,
+    Fingerprints,
+    bates_from_filename,
+    page_bates,
+)
+
+
+def test_bates_extracted_from_a_paired_filename() -> None:
+    """RVL-CDIP names pages by a Bates range, and both ends must be captured."""
+    assert bates_from_filename("10345348_10345354.jpg") == {"10345348", "10345354"}
+
+
+def test_bates_extracted_from_a_single_filename() -> None:
+    """Some pages carry one Bates number rather than a range."""
+    assert bates_from_filename("2501634600.jpg") == {"2501634600"}
+
+
+def test_short_numbers_are_not_bates() -> None:
+    """
+    A year or a page number must not become a fingerprint
+
+    A short digit run would match thousands of unrelated pages and gut the corpus.
+    """
+    assert bates_from_filename("2020_15.jpg") == set()
+    assert all(len(b) >= MIN_BATES_DIGITS for b in bates_from_filename("10345348_12.jpg"))
+
+
+def test_non_numeric_filenames_yield_nothing() -> None:
+    """Some RVL-CDIP names are not Bates at all, and must not produce junk fingerprints."""
+    assert bates_from_filename("PUBLICATIONS034845-4.jpg") == set()
+
+
+def test_page_bates_survives_ocr_punctuation() -> None:
+    """
+    OCR appends stray punctuation, so digits are compared after stripping non-digits
+
+    Without this the same page read by two OCR engines would fail to match.
+    """
+    assert "2031316091" in page_bates(["2031316091."])
+    assert "2031316091" in page_bates(["(2031316091)"])
+
+
+def test_page_bates_ignores_short_tokens() -> None:
+    """Ordinary numbers on a page must not be treated as identifiers."""
+    assert page_bates(["2020", "15", "3.14", "hello"]) == set()
+
+
+def test_contaminated_page_is_detected() -> None:
+    """A page carrying a benchmark Bates number must be reported."""
+    prints = Fingerprints({"2031316091"})
+    assert prints.contaminated(["memo", "dated", "2031316091"]) == "2031316091"
+
+
+def test_clean_page_passes() -> None:
+    """A page with no benchmark identifier must not be dropped."""
+    prints = Fingerprints({"2031316091"})
+    assert prints.contaminated(["memo", "dated", "1999", "9999999"]) is None
+
+
+def test_empty_fingerprints_never_filter() -> None:
+    """
+    With no fingerprints the filter is a no-op
+
+    CORD and SROIE are independent of IIT-CDIP, so a corpus with no overlap must pass everything
+    through rather than silently dropping pages.
+    """
+    assert Fingerprints().contaminated(["2031316091"]) is None
+
+
+def test_fingerprints_roundtrip(tmp_path: Path) -> None:
+    """The set must survive being written and reloaded, or a rebuild loses the filter."""
+    prints = Fingerprints({"10345348", "2501634600"})
+    prints.write(tmp_path)
+    assert Fingerprints.read(tmp_path).bates == prints.bates
+
+
+def test_missing_file_reads_as_empty(tmp_path: Path) -> None:
+    """An absent file means no overlap, not an error."""
+    assert len(Fingerprints.read(tmp_path)) == 0

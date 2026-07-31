@@ -255,7 +255,7 @@ that this is **not** the same as passing all-zero boxes, which mean every word s
 
 ## Training
 
-Layout-aware masked language modelling on PubTables-1M and DocLayNet, roughly 528k pages. Text is
+Layout-aware masked language modeling on PubTables-1M and DocLayNet, roughly 528k pages. Text is
 masked and boxes are left intact, so recovering a masked token rewards reading its position on the
 page. The layout tables are zero-initialized, so the model begins numerically identical to
 ModernBERT and grows layout sensitivity from there.

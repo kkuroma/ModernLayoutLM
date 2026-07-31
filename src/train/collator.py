@@ -1,5 +1,5 @@
 """
-A masked language modelling collator that keeps the boxes
+A masked language modeling collator that keeps the boxes
 
 `DataCollatorForLanguageModeling` builds its batch from `input_ids` and drops everything it does
 not recognize, `bbox` included. Feeding it our data would train a layout model on no layout while

@@ -1,5 +1,5 @@
 """
-Runs layout-aware masked language modelling on the pretraining corpora
+Runs layout-aware masked language modeling on the pretraining corpora
 
 This is the long run. Use `--max-pages` and `--max-steps` first to measure throughput before
 committing a night to it.

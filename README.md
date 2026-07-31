@@ -1,7 +1,7 @@
 # ModernLayoutLM
 
 LayoutLM's 2D layout embeddings grafted onto a ModernBERT backbone, pretrained with layout-aware
-masked language modelling and fine-tuned on document understanding tasks.
+masked language modeling and fine-tuned on document understanding tasks.
 
 ## What this is
 

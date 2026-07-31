@@ -8,7 +8,7 @@ The top layer. Tokenizes canonical parquet into model inputs, then runs the two 
 encoding.py   canonical parquet to chunked model inputs
 collator.py   the MVLM collator, which keeps the boxes
 optimizer.py  parameter groups: layout tables apart from the backbone
-pretrain.py   stage 1, layout-aware masked language modelling
+pretrain.py   stage 1, layout-aware masked language modeling
 finetune.py   stage 2, downstream supervised fine-tuning and the ablations
 ```
 

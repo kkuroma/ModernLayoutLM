@@ -280,7 +280,7 @@ class ModernLayoutLmModel(ModernLayoutLmPreTrainedModel, ModernBertModel):
 @auto_docstring
 class ModernLayoutLmForMaskedLM(ModernLayoutLmPreTrainedModel, ModernBertForMaskedLM):
     """
-    ModernLayoutLM with a masked language modelling head, for the layout-aware MLM stage
+    ModernLayoutLM with a masked language modeling head, for the layout-aware MLM stage
     """
 
     _tied_weights_keys = {"decoder.weight": "model.embeddings.tok_embeddings.weight"}

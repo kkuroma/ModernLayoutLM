@@ -21,7 +21,7 @@ SROIE is dominated by the `O` class: a model that predicts `O` everywhere scores
 nothing. Entity F1 is also the number the LayoutLM literature reports, so it is the only one worth
 comparing against.
 
-Positions labelled `-100` are dropped before scoring, which excludes padding, special tokens and
+Positions labeled `-100` are dropped before scoring, which excludes padding, special tokens and
 the non-first subwords of a word. Those are exactly the positions the loss ignored, so including
 them would score the model on predictions it was never trained to make.
 

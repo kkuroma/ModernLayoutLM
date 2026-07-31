@@ -17,6 +17,7 @@ shard, and the rest are pages, so the header is skipped by shape rather than by 
 
 from __future__ import annotations
 
+import logging
 import os
 from collections.abc import Iterator
 from pathlib import Path
@@ -24,6 +25,7 @@ from typing import Any
 
 import numpy as np
 
+from ..contamination import Fingerprints
 from ..normalize import COORDINATE_SCALE, clamp_box
 from ..schema import DatasetMeta, Document
 
@@ -37,6 +39,8 @@ DEFAULT_ROOT = Path(os.environ.get("IDL_IMDB_ROOT", "data/raw/idl/imdbs"))
 # another dataset being read as if it were one of ours.
 SHARD_GLOB = "imdb_*.npy"
 
+logger = logging.getLogger(__name__)
+
 SPLITS = {"train": "train", "validation": "validation", "test": "test"}
 
 # Files held out, taken from the end so the split is stable as more files are extracted.
@@ -45,6 +49,21 @@ TEST_FILES = 1
 
 # A page with almost no OCR text is not worth a training sequence.
 MIN_WORDS = 8
+
+# Loaded once per process. IDL descends from the same library as FUNSD and RVL-CDIP, so any page
+# carrying a benchmark Bates number is dropped before it can reach pretraining.
+_FINGERPRINTS: Fingerprints | None = None
+_DROPPED = 0
+
+
+def dropped_for_contamination() -> int:
+    """
+    Reports how many pages this process skipped as benchmark overlap
+
+    Returns:
+        The running count, for the build report.
+    """
+    return _DROPPED
 
 
 def describe() -> DatasetMeta:
@@ -117,6 +136,11 @@ def load(split: str, cache_dir: str | None = None) -> Iterator[Document]:
     else:
         chosen = files[: -(VALIDATION_FILES + TEST_FILES)]
 
+    global _FINGERPRINTS
+    if _FINGERPRINTS is None:
+        _FINGERPRINTS = Fingerprints.read(DEFAULT_ROOT.parent)
+        logger.info("contamination filter: %d benchmark fingerprints", len(_FINGERPRINTS))
+
     for path in chosen:
         yield from _read_shard(path)
 
@@ -142,6 +166,12 @@ def _read_shard(path: Path) -> Iterator[Document]:
     for index, entry in enumerate(entries):
         if not isinstance(entry, dict) or "ocr_tokens" not in entry:
             continue  # entry zero is the shard header
+        if _FINGERPRINTS is not None:
+            hit = _FINGERPRINTS.contaminated(entry.get("ocr_tokens") or [])
+            if hit is not None:
+                global _DROPPED
+                _DROPPED += 1
+                continue
         document = _build(f"idl-{path.stem}-{index}", entry)
         if document is not None:
             yield document

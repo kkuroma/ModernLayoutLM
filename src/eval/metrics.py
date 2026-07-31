@@ -30,7 +30,7 @@ def decode_token_predictions(
     """
     Turns logits and label ids into per-sequence BIO tag strings
 
-    Positions labelled `IGNORE_INDEX` are dropped from both sides, so padding, special tokens and
+    Positions labeled `IGNORE_INDEX` are dropped from both sides, so padding, special tokens and
     the non-first subwords of a word never reach the metric.
 
     Args:

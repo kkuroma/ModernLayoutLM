@@ -45,7 +45,7 @@ class ModelConfig:
 @dataclass(frozen=True)
 class PretrainConfig:
     """
-    Hyperparameters for the layout-aware masked language modelling stage
+    Hyperparameters for the layout-aware masked language modeling stage
     """
 
     datasets: list[str]

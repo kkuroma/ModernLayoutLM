@@ -81,11 +81,11 @@ def test_first_subword_only_labelling(processor: ModernLayoutLmProcessor) -> Non
 
 def test_label_all_subwords(processor: ModernLayoutLmProcessor) -> None:
     """With the flag set, every subword of a word carries that word's label."""
-    labelling = ModernLayoutLmProcessor(
+    labeling = ModernLayoutLmProcessor(
         tokenizer=processor.tokenizer,
         label_all_subwords=True,
     )
-    encoding = labelling(words=WORDS, boxes=BOXES, word_labels=LABELS, max_length=32, padding=False)
+    encoding = labeling(words=WORDS, boxes=BOXES, word_labels=LABELS, max_length=32, padding=False)
     for word_id, label in zip(encoding.word_ids(0), encoding["labels"][0], strict=True):
         assert label == (IGNORE_INDEX if word_id is None else LABELS[word_id])
 
