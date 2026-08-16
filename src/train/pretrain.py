@@ -1,13 +1,8 @@
 """
-Layout-aware masked language modeling
+Layout-aware masked language modelling, the stage that trains the layout tables
 
-The stage that makes the graft worth having. Fine-tuning alone leaves the zero-initialized layout
-tables with only a few hundred documents to learn from, and the FUNSD skip-MLM control confirms it:
-0.510 entity F1 with boxes against 0.508 without, which is no difference at all. Here the tables see
-hundreds of thousands of pages.
-
-The objective is LayoutLM's MVLM. Text is masked, boxes are left untouched, so recovering a masked
-token rewards reading its position on the page.
+Fine-tuning alone leaves the zero-initialized tables with too few documents to learn from
+Text is masked and boxes are left untouched, so recovering a token rewards reading its position
 """
 
 from __future__ import annotations
@@ -24,13 +19,12 @@ from transformers import AutoTokenizer, Trainer, TrainingArguments
 from src.config import PretrainConfig
 from src.model import ModernLayoutLmConfig, ModernLayoutLmForMaskedLM, ModernLayoutLmProcessor
 from src.train.collator import LayoutMlmCollator
-from src.train.encoding import load_split, tokenize_split
+from src.train.encoding import build_packed_corpus, load_split, tokenize_split
 from src.train.optimizer import build_param_groups, describe_param_groups
 
 logger = logging.getLogger(__name__)
 
-# Pages held back for a validation loss. The corpora ship their own validation splits, but they are
-# tens of thousands of pages and scoring all of them every epoch is wasted time.
+# Hold out a small slice as the shipped validation splits are tens of thousands of pages
 EVAL_PAGES = 2000
 
 
@@ -75,6 +69,8 @@ def pretrain(
     max_pages: int | None = None,
     max_steps: int | None = None,
     resume: bool = False,
+    pack: bool = True,
+    attn_implementation: str = "flash_attention_2",
 ) -> PretrainResult:
     """
     Runs layout-aware MLM over one or more pretraining corpora
@@ -87,10 +83,15 @@ def pretrain(
         output_dir: Where to write checkpoints and the final weights.
         seed: Random seed.
         num_proc: Worker processes for tokenization.
-        max_pages: Cap on pages per corpus, for a throughput probe.
+        max_pages: Cap on pages per corpus, overriding `config.max_pages_per_source`.
         max_steps: Cap on optimizer steps, for a throughput probe.
         resume: Continue from the newest checkpoint in `output_dir` when one exists. A multi-day
             run will be interrupted, and without this an interruption costs the whole run.
+        pack: Concatenate pages into full sequences instead of padding each one. At 1024 tokens a
+            typical page fills barely a third of the window, so this is close to a 2x saving.
+        attn_implementation: "flash_attention_2" takes the sliding window as a kernel parameter
+            rather than a materialized mask, which is what SDPA could not do. Measured at 1.9x on
+            the forward pass at 8192 tokens.
 
     Returns:
         The run's result.
@@ -101,36 +102,65 @@ def pretrain(
     if not datasets:
         raise ValueError("Pretraining needs at least one corpus")
 
+    if max_pages is None:
+        max_pages = config.max_pages_per_source
+
     tokenizer = AutoTokenizer.from_pretrained(backbone)
     processor = ModernLayoutLmProcessor(tokenizer=tokenizer)
 
-    train_parts: list[Dataset] = []
-    eval_parts: list[Dataset] = []
-    for name in datasets:
-        logger.info("tokenizing %s", name)
-        train_parts.append(
-            _encode(processed_dir, name, "train", processor, config, num_proc, max_pages)
+    if pack:
+        cache = processed_dir.parent / "packed"
+        train_dataset = build_packed_corpus(
+            processed_dir,
+            datasets,
+            "train",
+            processor,
+            config.max_length,
+            cache,
+            num_proc,
+            max_pages,
+            seed,
+        ).shuffle(seed=seed)
+        eval_dataset = build_packed_corpus(
+            processed_dir,
+            datasets,
+            "validation",
+            processor,
+            config.max_length,
+            cache,
+            num_proc,
+            EVAL_PAGES // len(datasets),
+            seed,
         )
-        eval_parts.append(
+    else:
+        train_parts = [
+            _encode(processed_dir, n, "train", processor, config, num_proc, max_pages, seed)
+            for n in datasets
+        ]
+        eval_parts = [
             _encode(
                 processed_dir,
-                name,
+                n,
                 "validation",
                 processor,
                 config,
                 num_proc,
                 EVAL_PAGES // len(datasets),
+                seed,
             )
-        )
-
-    train_dataset = _merge(train_parts).shuffle(seed=seed)
-    eval_dataset = _merge(eval_parts)
+            for n in datasets
+        ]
+        train_dataset = _merge(train_parts).shuffle(seed=seed)
+        eval_dataset = _merge(eval_parts)
     logger.info("train chunks %d, eval chunks %d", len(train_dataset), len(eval_dataset))
 
-    model = ModernLayoutLmForMaskedLM.from_pretrained(
-        backbone,
-        config=ModernLayoutLmConfig.from_pretrained(backbone, reference_compile=False),
+    model_config = ModernLayoutLmConfig.from_pretrained(
+        backbone, reference_compile=False, attn_implementation=attn_implementation
     )
+    # Keep weights at FP32 as BF16 masters cost 18 F1 on FUNSD
+    # Autocast still feeds flash-attn the BF16 inputs it needs
+    model = ModernLayoutLmForMaskedLM.from_pretrained(backbone, config=model_config)
+    logger.info("attention: %s | packing: %s", model.config._attn_implementation, pack)
     groups = build_param_groups(
         model=model,
         learning_rate=config.learning_rate,
@@ -181,6 +211,7 @@ def _encode(
     config: PretrainConfig,
     num_proc: int | None,
     max_pages: int | None,
+    seed: int,
 ) -> Dataset:
     """
     Loads and tokenizes one corpus split into fixed-length chunks
@@ -193,13 +224,15 @@ def _encode(
         config: Pretraining hyperparameters, supplying the sequence length.
         num_proc: Worker processes for tokenization.
         max_pages: Cap on pages to read, or None for all.
+        seed: Seed for the subsample, which is a shuffle rather than a head of the file because
+            the shards are grouped by source.
 
     Returns:
         A tokenized dataset of `input_ids`, `attention_mask` and `bbox`.
     """
     raw = load_split(processed_dir, name, split)
     if max_pages is not None and max_pages < len(raw):
-        raw = raw.select(range(max_pages))
+        raw = raw.shuffle(seed=seed).select(range(max_pages))
     return tokenize_split(
         dataset=raw,
         processor=processor,
@@ -258,7 +291,7 @@ def _training_args(
         dataloader_num_workers=4,
         seed=seed,
         report_to=[],
-        # The collator builds the batch, so Trainer must not prune bbox out of the dataset first.
+        # The collator builds the batch, so Trainer must not prune bbox out of the dataset first
         remove_unused_columns=False,
     )
 

@@ -1,8 +1,8 @@
 """
 Tests for the MVLM collator
 
-The whole reason this class exists is that `DataCollatorForLanguageModeling` drops `bbox`. So the
-tests that matter are the ones checking the boxes arrive intact and that only text is corrupted.
+This class exists because `DataCollatorForLanguageModeling` drops `bbox`
+The tests that matter check that boxes arrive intact and that only text is corrupted
 """
 
 from pathlib import Path

@@ -1,19 +1,18 @@
 """
 Turning canonical parquet into tokenized model inputs
 
-This is the first stage that may touch both `src.data` and `src.model`, so the processor lives
-here rather than in the data stage. Long pages are split into overlapping chunks, which is what
-lets a 1500-word receipt train at a 512 token limit without losing its tail.
+The first stage that may touch both src.data and src.model, so the processor lives here
+Long pages are split into overlapping chunks so a long receipt keeps its tail
 """
 
 from __future__ import annotations
 
 import logging
-from collections.abc import Iterable, Iterator, Mapping
+from collections.abc import Iterable, Mapping
 from pathlib import Path
 from typing import Any, cast
 
-from datasets import Dataset, load_dataset, load_from_disk
+from datasets import Dataset, concatenate_datasets, load_dataset, load_from_disk
 
 from src.data import DatasetMeta
 from src.model import ModernLayoutLmProcessor
@@ -21,12 +20,25 @@ from src.train.packing import pack_encodings
 
 logger = logging.getLogger(__name__)
 
-# Columns the model consumes. Everything else is dropped before training so that `Trainer` never
-# has to guess, and so a stray column cannot silently become a forward argument.
+# Drop everything else or a stray column becomes a forward argument
 MODEL_COLUMNS = ["input_ids", "attention_mask", "bbox", "labels"]
 
-# Token overlap between consecutive chunks of an over-length page.
+# Token overlap between consecutive chunks of an over-length page
 DEFAULT_STRIDE = 128
+
+# Which page each chunk came from, so scoring can stitch a chunked page back into one sequence
+SAMPLE_INDEX = "sample_index"
+
+"""
+Pages handed to one packing call
+
+Packing is sequential by nature, so it is parallelized by packing blocks of pages independently
+rather than by splitting a block. Each block flushes a partial sequence at its end, which is the
+whole cost of the parallelism: at this block size that is roughly one padded tail per eight hundred
+packed sequences, under a tenth of a percent, against a single-threaded pass that left fifteen
+cores idle for forty minutes.
+"""
+PACK_BATCH_PAGES = 2000
 
 
 def load_split(processed_dir: Path, name: str, split: str) -> Dataset:
@@ -74,6 +86,7 @@ def tokenize_split(
     max_length: int,
     stride: int = DEFAULT_STRIDE,
     num_proc: int | None = None,
+    keep_sample_index: bool = False,
 ) -> Dataset:
     """
     Tokenizes a canonical split into model inputs, chunking pages that overrun
@@ -89,6 +102,7 @@ def tokenize_split(
         max_length: Tokens per chunk.
         stride: Token overlap between consecutive chunks.
         num_proc: Worker processes for the map, or None for one.
+        keep_sample_index: Emit a `SAMPLE_INDEX` column naming each chunk's source page.
 
     Returns:
         A dataset whose columns are exactly `MODEL_COLUMNS`, minus labels for pretraining.
@@ -99,7 +113,7 @@ def tokenize_split(
     if task not in {"token", "sequence", "pretrain"}:
         raise ValueError(f"Unknown task {task!r}")
 
-    def encode(batch: dict[str, list[Any]]) -> dict[str, list[Any]]:
+    def encode(batch: dict[str, list[Any]], indices: list[int]) -> dict[str, list[Any]]:
         """Encodes one batch of canonical rows into chunked model inputs."""
         word_labels = batch["word_labels"] if task == "token" else None
         encoding = processor(
@@ -112,6 +126,7 @@ def tokenize_split(
             return_overflowing_tokens=True,
             stride=stride,
         )
+        mapping = encoding["overflow_to_sample_mapping"]
         result: dict[str, list[Any]] = {
             "input_ids": encoding["input_ids"],
             "attention_mask": encoding["attention_mask"],
@@ -120,16 +135,18 @@ def tokenize_split(
         if task == "token":
             result["labels"] = encoding["labels"]
         elif task == "sequence":
-            # Every chunk of a page carries that page's label, so long pages contribute several
-            # examples rather than being truncated to their first 512 tokens.
-            mapping = encoding["overflow_to_sample_mapping"]
+            # Label every chunk so long pages are not truncated away
             result["labels"] = [batch["doc_label"][index] for index in mapping]
+        if keep_sample_index:
+            # The row index in the split, not the offset within this batch
+            result[SAMPLE_INDEX] = [indices[index] for index in mapping]
         return result
 
     return dataset.map(
         encode,
         batched=True,
         batch_size=16,
+        with_indices=True,
         remove_columns=dataset.column_names,
         num_proc=num_proc,
         desc="tokenizing",
@@ -170,13 +187,16 @@ def prepare_task_splits(
         raw = load_split(processed_dir, name, split)
         if split == "train" and max_train_pages is not None and max_train_pages < len(raw):
             raw = raw.shuffle(seed=seed).select(range(max_train_pages))
+        # Overlapping chunks would score their shared tokens twice, so evaluation splits abut
+        scoring = split != "train"
         splits[split] = tokenize_split(
             dataset=raw,
             processor=processor,
             task=meta.task,
             max_length=max_length,
-            stride=stride,
+            stride=0 if scoring else stride,
             num_proc=num_proc,
+            keep_sample_index=scoring,
         )
     return splits, meta
 
@@ -190,6 +210,7 @@ def build_packed_corpus(
     cache_dir: Path,
     num_proc: int | None = None,
     max_pages: int | None = None,
+    seed: int = 42,
 ) -> Dataset:
     """
     Tokenizes and packs several pretraining corpora into one dataset, cached on disk
@@ -197,6 +218,11 @@ def build_packed_corpus(
     Packing removes the padding that otherwise dominates pretraining: at 1024 tokens a typical
     page fills barely a third of the window. The result is cached because tokenizing tens of
     millions of pages takes hours, and a multi-day run will be restarted more than once.
+
+    A capped corpus is shuffled before it is cut. Taking the first `max_pages` rows instead would
+    take whichever shards happen to sort first, and the shards are grouped by source: PubTables is
+    ordered by PMC accession and RVL-CDIP by class, so the head of the file is not a sample of the
+    corpus. That matters most for a run that will be stopped before it finishes an epoch.
 
     Args:
         processed_dir: Root of the processed tree.
@@ -207,6 +233,7 @@ def build_packed_corpus(
         cache_dir: Where to store the packed arrow dataset.
         num_proc: Worker processes for tokenization.
         max_pages: Cap on pages per corpus, for probes.
+        seed: Seed for that subsample, so the cache key and the pages agree.
 
     Returns:
         A dataset of `input_ids`, `attention_mask` and `bbox`, every row exactly `max_length` long.
@@ -237,25 +264,47 @@ def build_packed_corpus(
         )
         return {"input_ids": encoding["input_ids"], "bbox": encoding["bbox"]}
 
-    def stream() -> Iterator[dict[str, list[Any]]]:
-        """Yields packed sequences across every requested corpus in turn."""
-        for name in names:
-            raw = load_split(processed_dir, name, split)
-            if max_pages is not None and max_pages < len(raw):
-                raw = raw.select(range(max_pages))
-            tokenized = raw.map(
-                unpadded,
-                batched=True,
-                batch_size=64,
-                remove_columns=raw.column_names,
-                num_proc=num_proc,
-                desc=f"tokenizing {name}/{split}",
-            )
-            # Dataset iteration is typed as a union of mapping-like shapes; rows are dicts.
-            pages = cast(Iterable[Mapping[str, Any]], tokenized)
-            yield from pack_encodings(pages, max_length, separator, pad)
+    def packer(batch: dict[str, list[Any]]) -> dict[str, list[Any]]:
+        """Packs one block of tokenized pages into full-length sequences."""
+        pages = cast(
+            Iterable[Mapping[str, Any]],
+            [
+                {"input_ids": ids, "bbox": boxes}
+                for ids, boxes in zip(batch["input_ids"], batch["bbox"], strict=True)
+            ],
+        )
+        sequences = list(pack_encodings(pages, max_length, separator, pad))
+        return {
+            "input_ids": [s["input_ids"] for s in sequences],
+            "attention_mask": [s["attention_mask"] for s in sequences],
+            "bbox": [s["bbox"] for s in sequences],
+        }
 
-    packed = Dataset.from_generator(stream)
+    parts: list[Dataset] = []
+    for name in names:
+        raw = load_split(processed_dir, name, split)
+        if max_pages is not None and max_pages < len(raw):
+            raw = raw.shuffle(seed=seed).select(range(max_pages))
+        tokenized = raw.map(
+            unpadded,
+            batched=True,
+            batch_size=64,
+            remove_columns=raw.column_names,
+            num_proc=num_proc,
+            desc=f"tokenizing {name}/{split}",
+        )
+        parts.append(
+            tokenized.map(
+                packer,
+                batched=True,
+                batch_size=PACK_BATCH_PAGES,
+                remove_columns=tokenized.column_names,
+                num_proc=num_proc,
+                desc=f"packing {name}/{split}",
+            )
+        )
+
+    packed = parts[0] if len(parts) == 1 else concatenate_datasets(parts)
     target.parent.mkdir(parents=True, exist_ok=True)
     packed.save_to_disk(str(target))
     logger.info("packed %d sequences into %s", len(packed), target)

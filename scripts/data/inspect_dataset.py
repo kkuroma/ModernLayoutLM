@@ -1,12 +1,8 @@
 """
 Eyeballs a processed dataset, to confirm normalization by looking rather than by assertion
 
-Prints a summary and, optionally, renders the normalized boxes back onto a blank page as an image.
-Assertions catch boxes outside the scale, but only a picture catches boxes that are in range and
-still in the wrong place, such as a transposed x and y.
-
-    uv run python scripts/data/inspect_dataset.py --dataset funsd
-    uv run python scripts/data/inspect_dataset.py --dataset cord --render scratchpad/cord.png
+Prints a summary and optionally renders the normalized boxes back onto a blank page
+Assertions catch boxes outside the scale, but only a picture catches a transposed x and y
 """
 
 from __future__ import annotations
@@ -21,7 +17,7 @@ from PIL import Image, ImageDraw
 from src.config import load_config
 from src.data import COORDINATE_SCALE, DatasetMeta
 
-# Rendered page size in pixels. Boxes are on a 0-1000 grid, so this is a straight scale.
+# Boxes are on a 0-1000 grid, so the rendered pixel size is a straight scale
 RENDER_SIZE = (700, 900)
 
 

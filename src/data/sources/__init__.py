@@ -1,13 +1,8 @@
 """
 One adapter per dataset, behind a common interface
 
-Every adapter exposes exactly two functions, so `build` never needs to know which dataset it is
-handling:
-
-- `describe() -> DatasetMeta`, the task and label vocabulary.
-- `load(split, cache_dir) -> Iterator[Document]`, canonical documents.
-
-Adding a dataset means writing a module with those two functions and listing it here.
+Every adapter exposes describe and load, so build never knows which dataset it is handling
+Adding a dataset means writing those two functions and listing the module here
 """
 
 from __future__ import annotations
@@ -38,7 +33,7 @@ SOURCES: dict[str, Source] = {
     "idl": idl,  # type: ignore[dict-item]
 }
 
-# Groups the scripts expose as `--group`, so a caller need not spell out every name.
+# Groups the scripts expose as `--group`, so a caller need not spell out every name
 GROUPS = {
     "downstream": ["funsd", "cord", "sroie", "rvlcdip"],
     "token": ["funsd", "cord", "sroie"],

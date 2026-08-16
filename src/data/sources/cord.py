@@ -1,10 +1,8 @@
 """
-CORD: receipt key information extraction, 1000 Indonesian receipts, 29 fields
+CORD: receipt key information extraction over Indonesian receipts
 
-The words are there but buried. `naver-clova-ix/cord-v2` stores one JSON string per receipt, and
-the words live inside `valid_line[].words[].quad` as four corners in pixels. No OCR is needed, only
-patience. Field names like `menu.nm` come from the line, not the word, so BIO tags are derived from
-each line's word run.
+Words are buried in one JSON string per receipt, as four-corner quads in pixels
+Field names come from the line rather than the word, so BIO is derived from each line's word run
 """
 
 from __future__ import annotations

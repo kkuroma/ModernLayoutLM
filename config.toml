@@ -1,41 +1,46 @@
-# Where things live. `data` is a symlink to the vault, `models` is local disk.
+# Where things live, `data` symlinks to the vault and `models` is local disk
 [Paths]
-raw_dir = "data/raw"                      # datasets exactly as downloaded, untouched
+raw_dir = "data/raw"                       # datasets exactly as downloaded
 processed_dir = "data/processed"           # canonical parquet, our schema
-checkpoint_dir = "data/checkpoints"        # intermediate training checkpoints, on the vault
+checkpoint_dir = "data/checkpoints"        # training checkpoints
 backbone_dir = "models/backbones"          # pulled upstream weights
 export_dir = "models/exports"              # final HF-format models
 report_dir = "notebooks/results"           # evaluation tables
 
-# The backbone and the layout embedding geometry.
+# The graft: LayoutLM's four 2D tables added onto a ModernBERT embedding
+# 1. Boxes normalized to a 0-1000 grid, one table each for x, y, width, height
+# 2. Tables start at zero so a fresh graft matches its backbone exactly
 [Model]
 backbone = "answerdotai/ModernBERT-base"
-max_2d_position_embeddings = 1024          # coordinates are normalized to 0-1000
+max_2d_position_embeddings = 1024          # coordinates normalized to 0-1000
 coordinate_scale = 1000
-zero_init_2d = true                        # start numerically identical to the backbone
+zero_init_2d = true                        # a fresh graft is identical to its backbone
 
-# Stage 1: layout-aware masked language modelling.
+# Stage 1: layout-aware masked language modelling
+# 1. Mask the text, leave the boxes, so recovering a token rewards reading its position
+# 2. Pages are packed into full sequences rather than padded one per window
+# 3. Backbone and the fresh 2D tables train at separate rates
+# 4. One pass over the whole corpus, capped per source so no one corpus dominates
 [Pretrain]
-datasets = ["pubtables", "doclaynet"]
-max_length = 512
-mlm_probability = 0.3                      # ModernBERT's own recipe, not BERT's 0.15
+datasets = ["idl", "pubtables", "pdfa", "doclaynet"]
+max_length = 512                           # more real tokens per second than 1024, and RoPE extrapolates past it
+mlm_probability = 0.3                      # ModernBERT's recipe, not BERT's 0.15
 learning_rate = 5e-5                       # pretrained backbone
 layout_learning_rate = 1e-3                # fresh 2D tables, they start from zero
 weight_decay = 0.01
 warmup_ratio = 0.05
-# Measured at 54 sequences/second on the 3090: sdpa, no flash-attn, and ModernBERT's sliding
-# window loses its advantage without it. The corpus is 528k pages, about 1.41M chunks at 512
-# tokens, so one epoch is roughly 7 hours. One pass over all of it beats three over a third.
-epochs = 1
-# 13.2GB peak at 16. Raising it to 24 costs 18.7GB and buys 5%, since the step is compute bound.
-batch_size = 16
+epochs = 1                                 # one pass over everything beats several over a fraction
+max_pages_per_source = 1500000             # ~2.19M pages, ~31k steps
+batch_size = 16                            # 13.2GB peak; 24 costs 18.7GB and buys 5%
 grad_accum = 4
-save_total_limit = 3
+save_total_limit = 0                       # 0 keeps every checkpoint
 
-# Stage 2: downstream supervised fine-tuning.
+# Stage 2: downstream supervised fine-tuning
+# 1. Token classification for FUNSD, CORD and SROIE, sequence classification for RVL-CDIP
+# 2. Per-task overrides below, since the corpora differ by three orders of magnitude
 [Finetune]
 max_length = 1024
-learning_rate = 5e-5
+learning_rate = 3e-4                       # swept on FUNSD, +0.053 F1 over LayoutLM's 5e-5
 layout_learning_rate = 1e-4
 weight_decay = 0.01
 warmup_ratio = 0.1
@@ -43,9 +48,9 @@ epochs = 20
 batch_size = 8
 grad_accum = 2
 label_all_subwords = false                 # label the first subword, -100 on the rest
-max_train_pages = 0                        # 0 means use everything
+max_train_pages = 0                        # 0 uses everything
 
-# Per-task overrides. Small datasets need more epochs, RVL-CDIP needs far fewer.
+# Small corpora, a few hundred pages each, so they need many more passes
 [Finetune.funsd]
 epochs = 30
 
@@ -54,12 +59,3 @@ epochs = 30
 
 [Finetune.sroie]
 epochs = 30
-
-# RVL-CDIP is 308k pages. Four ablation variants over all of it is roughly 14 GPU hours, which
-# buys precision on a number that is already not comparable to published results, since the OCR
-# here is EasyOCR rather than the papers' Tesseract. Subsampled to a fixed 40k pages, identical
-# across every variant, so the comparison between them stays honest.
-[Finetune.rvlcdip]
-epochs = 3
-batch_size = 16
-max_train_pages = 40000

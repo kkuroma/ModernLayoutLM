@@ -1,11 +1,8 @@
 """
 Uploads an exported model directory to the Hugging Face Hub
 
-Not run as part of the pipeline. Publishing is a decision, so it stays a separate deliberate step.
-Requires `HF_TOKEN` in `.env` or the environment, with write access to the target repository.
-
-    uv run python scripts/push_to_hub.py --export models/exports/ModernLayoutLM-base-mlm \
-        --repo your-name/ModernLayoutLM-base
+Publishing is a decision, so this stays a deliberate step outside the pipeline
+Requires HF_TOKEN with write access to the target repository
 """
 
 from __future__ import annotations
@@ -16,7 +13,7 @@ from pathlib import Path
 
 from huggingface_hub import HfApi
 
-# Without these the repository loads as a bare ModernBERT, or not at all.
+# Without these the repository loads as a bare ModernBERT, or not at all
 REQUIRED_FILES = (
     "config.json",
     "configuration_modernlayoutlm.py",

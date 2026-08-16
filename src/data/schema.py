@@ -1,9 +1,8 @@
 """
 The canonical document schema
 
-Every source, however it arrives, is reduced to this one shape before anything downstream sees it.
-Documents are parquet, and the label vocabulary lives beside them in a sidecar so that training
-never has to infer a label set from whichever rows happen to be present.
+Every source is reduced to this one shape before anything downstream sees it
+The label vocabulary lives in a sidecar so training never infers it from whichever rows are present
 """
 
 from __future__ import annotations
@@ -20,7 +19,7 @@ from .normalize import COORDINATE_SCALE
 
 META_FILENAME = "dataset_meta.json"
 
-# int16 comfortably holds [0, 1000] and halves the size of the box column against int32.
+# int16 comfortably holds [0, 1000] and halves the size of the box column against int32
 DOCUMENT_SCHEMA = pa.schema(
     [
         pa.field("doc_id", pa.string(), nullable=False),

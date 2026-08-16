@@ -1,10 +1,8 @@
 """
 Tests for the benchmark contamination filter
 
-FUNSD and RVL-CDIP descend from the same UCSF library as the IDL pretraining corpus, so their
-evaluation pages can appear in it verbatim. A filter that silently stopped matching would let that
-contamination back in while every count still looked plausible, so these tests pin the matching
-behavior rather than just the plumbing.
+A filter that silently stopped matching would look plausible in every count it reports
+These pin the matching behavior rather than the plumbing around it
 """
 
 from pathlib import Path
@@ -44,12 +42,27 @@ def test_non_numeric_filenames_yield_nothing() -> None:
 
 def test_page_bates_survives_ocr_punctuation() -> None:
     """
-    OCR appends stray punctuation, so digits are compared after stripping non-digits
+    OCR appends stray punctuation, so a Bates number is read as the digit run inside a token
 
     Without this the same page read by two OCR engines would fail to match.
     """
     assert "2031316091" in page_bates(["2031316091."])
     assert "2031316091" in page_bates(["(2031316091)"])
+
+
+def test_page_bates_does_not_join_across_a_separator() -> None:
+    """
+    A separator ends a number, so a range is two short numbers rather than one long one
+
+    Deleting every non-digit instead turned the citation "1011-1019." into "10111019" and the
+    confidence interval "(0.092-0.262)" into "00920262". Both are long enough to look like Bates
+    numbers, both collided with real ones, and both dropped clean PubTables pages.
+    """
+    assert page_bates(["1011-1019."]) == set()
+    assert page_bates(["(0.092-0.262)"]) == set()
+    assert page_bates(["R10,001-R15,000"]) == set()
+    # A genuine Bates number beside a range is still found
+    assert page_bates(["2031316091/1011-1019"]) == {"2031316091"}
 
 
 def test_page_bates_ignores_short_tokens() -> None:

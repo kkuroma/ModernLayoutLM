@@ -1,17 +1,8 @@
 """
-ModernLayoutLM: LayoutLM's 2D layout embeddings on a ModernBERT backbone
+ModernLayoutLM: LayoutLM's 2D layout embeddings summed into a ModernBERT backbone
 
-The graft is confined to the embedding module. Four coordinate embedding tables are summed into
-the token embeddings before the embedding LayerNorm, exactly as in LayoutLM v1, where `x0` and
-`x1` share table X and `y0` and `y1` share table Y. Attention is left completely alone, so
-ModernBERT's fused kernels, sliding-window masks and RoPE all keep working unmodified.
-
-The four tables are zero-initialized by default. Seven random vectors added to every token
-embedding would destroy the pretrained representation before the first optimizer step, so instead
-the model starts numerically identical to its backbone and learns layout sensitivity from there.
-
-This module is copied into exported model directories, so it must import only from torch and
-transformers, and may reference its siblings only by relative import.
+The graft is confined to the embedding module so attention keeps its fused kernels and RoPE
+This module is copied into exported model directories and may import only torch and transformers
 """
 
 from __future__ import annotations
@@ -45,7 +36,7 @@ from transformers.utils.output_capturing import capture_outputs
 
 from .configuration_modernlayoutlm import ModernLayoutLmConfig
 
-# Bounding boxes arrive as (x0, y0, x1, y1) with the origin at the top left corner.
+# Bounding boxes arrive as (x0, y0, x1, y1) with the origin at the top left corner
 BBOX_COORDS = 4
 
 
@@ -224,7 +215,7 @@ class ModernLayoutLmModel(ModernLayoutLmPreTrainedModel, ModernBertModel):
             `[0, config.coordinate_scale]` with the origin at the top left. Omitting it makes the
             model behave as plain ModernBERT.
         """
-        # Branched rather than written as an xor so that the non-None case is provable.
+        # Branched rather than written as an xor so that the non-None case is provable
         if inputs_embeds is not None:
             if input_ids is not None:
                 raise ValueError("You must specify exactly one of input_ids or inputs_embeds")
@@ -261,7 +252,7 @@ class ModernLayoutLmModel(ModernLayoutLmPreTrainedModel, ModernBertModel):
                 hidden_states, position_ids, layer_type
             )
 
-        # Cast because nn.Module.__getattr__ erases the element type of self.layers.
+        # Cast because nn.Module.__getattr__ erases the element type of self.layers
         for module in self.layers:
             encoder_layer = cast(ModernBertEncoderLayer, module)
             attention_type = encoder_layer.attention_type
@@ -325,8 +316,7 @@ class ModernLayoutLmForMaskedLM(ModernLayoutLmPreTrainedModel, ModernBertForMask
             position_ids=position_ids,
             inputs_embeds=inputs_embeds,
             labels=labels,
-            # Lands on ModernLayoutLmModel.forward, which names bbox. The ModernBert head in
-            # between only forwards it as an opaque kwarg, so the hop is invisible to pyright.
+            # Ignore as the ModernBert head forwards bbox opaquely and pyright loses it
             bbox=bbox,  # pyright: ignore[reportCallIssue]
             **kwargs,
         )
@@ -376,8 +366,7 @@ class ModernLayoutLmForTokenClassification(
             position_ids=position_ids,
             inputs_embeds=inputs_embeds,
             labels=labels,
-            # Lands on ModernLayoutLmModel.forward, which names bbox. The ModernBert head in
-            # between only forwards it as an opaque kwarg, so the hop is invisible to pyright.
+            # Ignore as the ModernBert head forwards bbox opaquely and pyright loses it
             bbox=bbox,  # pyright: ignore[reportCallIssue]
             **kwargs,
         )
@@ -427,8 +416,7 @@ class ModernLayoutLmForSequenceClassification(
             position_ids=position_ids,
             inputs_embeds=inputs_embeds,
             labels=labels,
-            # Lands on ModernLayoutLmModel.forward, which names bbox. The ModernBert head in
-            # between only forwards it as an opaque kwarg, so the hop is invisible to pyright.
+            # Ignore as the ModernBert head forwards bbox opaquely and pyright loses it
             bbox=bbox,  # pyright: ignore[reportCallIssue]
             **kwargs,
         )

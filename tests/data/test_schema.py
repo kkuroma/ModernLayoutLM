@@ -1,9 +1,8 @@
 """
 Tests for the canonical schema and its validation
 
-Validation exists to make misalignment loud. A document whose boxes and words disagree still
-trains, still shows a falling loss, and is simply wrong, so these tests check that every way of
-being wrong actually raises.
+A document whose boxes and words disagree still trains and still shows a falling loss
+These check that every way of being wrong actually raises
 """
 
 from pathlib import Path

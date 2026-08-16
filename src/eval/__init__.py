@@ -1,14 +1,20 @@
 """
 Scoring predictions
 
-Pure functions of predictions and labels, which is why this sits below `src.train` in the layer
-contract rather than above it: training consumes them for its own compute_metrics callback. The
-result tables are assembled in `scripts/eval/`.
-
-Token tasks are scored at the entity level, because per-token accuracy on these datasets is
-dominated by the O class and looks impressive while saying nothing.
+Pure functions of predictions and labels, so this sits below src.train in the layer contract
+Token tasks are scored at the entity level as per-token accuracy is dominated by the O class
 """
 
-from .metrics import decode_token_predictions, sequence_metrics, token_metrics
+from .fields import FIELD_LEVEL_SOURCES, decode_fields, field_metrics, score_fields
+from .metrics import decode_token_predictions, sequence_metrics, stitch_chunks, token_metrics
 
-__all__ = ["decode_token_predictions", "sequence_metrics", "token_metrics"]
+__all__ = [
+    "FIELD_LEVEL_SOURCES",
+    "decode_fields",
+    "decode_token_predictions",
+    "field_metrics",
+    "score_fields",
+    "sequence_metrics",
+    "stitch_chunks",
+    "token_metrics",
+]

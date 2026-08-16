@@ -1,16 +1,8 @@
 """
 Writes a self-contained Hugging Face model directory
 
-The output loads with `from_pretrained(..., trust_remote_code=True)` on a machine that has never
-seen this repository. `save_pretrained` copies `src/model`'s three modules into the directory by
-following their relative imports, and `auto_map` in `config.json` points the Auto classes at them.
-
-The export is not trusted until it is proved: the script reloads the result in a fresh subprocess
-and requires bit-identical logits against the in-process model.
-
-    uv run python scripts/export_hf.py --checkpoint data/checkpoints/pretrain-base
-    uv run python scripts/export_hf.py --checkpoint data/checkpoints/finetune/funsd-layout-... \
-        --name ModernLayoutLM-base-funsd
+save_pretrained copies the three model modules in and auto_map points the Auto classes at them
+The result is reloaded in a fresh subprocess and required to give bit-identical logits
 """
 
 from __future__ import annotations
@@ -37,7 +29,7 @@ from src.model import (
     register_modernlayoutlm,
 )
 
-# Which class to export, and which Auto class the checkpoint should register itself under.
+# Which class to export, and which Auto class the checkpoint should register itself under
 HEADS = {
     "base": (ModernLayoutLmModel, "AutoModel"),
     "mlm": (ModernLayoutLmForMaskedLM, "AutoModelForMaskedLM"),
@@ -45,7 +37,7 @@ HEADS = {
     "sequence": (ModernLayoutLmForSequenceClassification, "AutoModelForSequenceClassification"),
 }
 
-# Modules that must land in the export for trust_remote_code to work.
+# Modules that must land in the export for trust_remote_code to work
 REQUIRED_FILES = (
     "config.json",
     "configuration_modernlayoutlm.py",
@@ -100,7 +92,7 @@ def main() -> int:
     tokenizer = AutoTokenizer.from_pretrained(args.tokenizer or args.checkpoint)
     processor = ModernLayoutLmProcessor(tokenizer=tokenizer)
 
-    # Registering for the auto class is what makes save_pretrained copy the modules across.
+    # Registering for the auto class is what makes save_pretrained copy the modules across
     model_config.register_for_auto_class("AutoConfig")
     model.register_for_auto_class(auto_class)
     ModernLayoutLmProcessor.register_for_auto_class("AutoProcessor")

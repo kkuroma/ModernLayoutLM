@@ -1,9 +1,8 @@
 """
 Tests for the per-dataset adapters
 
-These exercise each adapter's parsing against a hand-built record, so they need no network and run
-in milliseconds. The point is to pin down the awkward parts of each source: CORD's four-corner
-quads, SROIE's unnamed label integers, and RVL-CDIP's segment-level OCR.
+Each adapter is parsed against a hand-built record, so they need no network
+The point is to pin the awkward part of each source rather than its happy path
 """
 
 import pytest
@@ -77,7 +76,7 @@ def test_cord_labels_bio_per_line() -> None:
     assert document.word_labels is not None
     assert [names[label] for label in document.word_labels] == ["B-menu.nm", "I-menu.nm"]
     assert document.words == ["Nasi", "Campur"]
-    # x spans 10..50 of a 200px page, so 50..250 on the 1000 grid.
+    # x spans 10..50 of a 200px page, so 50..250 on the 1000 grid
     assert document.bboxes[0] == [50, 200, 250, 300]
 
 
@@ -154,7 +153,7 @@ def test_rvlcdip_splits_segments_into_words() -> None:
     assert document.words == ["Plasminogen", "Activator", "Activity", "Total"]
     assert document.doc_label == rvlcdip.CLASS_NAMES.index("invoice")
     assert document.word_labels is None
-    # The three split boxes must tile the segment left to right without going outside it.
+    # The three split boxes must tile the segment left to right without going outside it
     assert document.bboxes[0][0] == 0
     assert document.bboxes[2][2] == 600
     assert document.bboxes[0][2] <= document.bboxes[1][0]

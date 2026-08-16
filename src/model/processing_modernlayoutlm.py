@@ -1,13 +1,8 @@
 """
 Turning words and boxes into model inputs
 
-There is no image tower, so there is no image processor. The processor's whole job is to run the
-tokenizer over pre-split words and then broadcast each word's box, and optionally its label,
-across the subword pieces that word produced. `word_ids()` from the fast tokenizer gives that
-mapping, which is the same mechanism LayoutLMv3 uses over its own BPE tokenizer.
-
-This module is copied into exported model directories, so it must import only from torch and
-transformers, and may reference its siblings only by relative import.
+There is no image tower, so this only tokenizes words and broadcasts each box across its subwords
+This module is copied into exported model directories and may import only torch and transformers
 """
 
 from __future__ import annotations
@@ -17,13 +12,12 @@ from typing import Any
 from transformers.processing_utils import ProcessorMixin
 from transformers.tokenization_utils_base import BatchEncoding
 
-# Boxes for tokens that do not come from a word. CLS anchors the origin and SEP the far corner,
-# matching LayoutLM, and padding sits at the origin where it is masked out anyway.
+# Follow LayoutLM: CLS at the origin, SEP at the far corner, padding masked out
 CLS_BOX = (0, 0, 0, 0)
 SEP_BOX = (1000, 1000, 1000, 1000)
 PAD_BOX = (0, 0, 0, 0)
 
-# Label id meaning "do not compute loss here", the torch cross-entropy default.
+# Label id meaning "do not compute loss here", the torch cross-entropy default
 IGNORE_INDEX = -100
 
 
@@ -53,8 +47,7 @@ class ModernLayoutLmProcessor(ProcessorMixin):
         self.label_all_subwords = label_all_subwords
         super().__init__(tokenizer)
 
-    # ProcessorMixin.__call__ is typed for image and audio processors. Every domain-specific HF
-    # processor diverges from it, and this one takes words and boxes.
+    # Diverge as ProcessorMixin.__call__ is typed for image and audio processors
     def __call__(  # pyright: ignore[reportIncompatibleMethodOverride]
         self,
         words: list[str] | list[list[str]],

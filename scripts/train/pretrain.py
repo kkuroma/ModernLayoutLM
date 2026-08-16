@@ -1,11 +1,7 @@
 """
-Runs layout-aware masked language modeling on the pretraining corpora
+Runs layout-aware masked language modelling on the pretraining corpora
 
-This is the long run. Use `--max-pages` and `--max-steps` first to measure throughput before
-committing a night to it.
-
-    uv run python scripts/train/pretrain.py --max-pages 2000 --max-steps 50   # throughput probe
-    uv run python scripts/train/pretrain.py                                    # the real run
+This is the long run, so probe throughput with --max-pages and --max-steps before committing to it
 """
 
 from __future__ import annotations
@@ -36,6 +32,13 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--max-steps", type=int, help="cap optimizer steps, for a probe")
     parser.add_argument("--num-proc", type=int, help="worker processes for tokenization")
     parser.add_argument("--seed", type=int, default=42, help="random seed")
+    parser.add_argument("--no-pack", action="store_true", help="disable sequence packing")
+    parser.add_argument(
+        "--attn",
+        default="flash_attention_2",
+        choices=["flash_attention_2", "sdpa", "eager"],
+        help="attention implementation",
+    )
     parser.add_argument(
         "--resume",
         action="store_true",
@@ -87,6 +90,8 @@ def main() -> int:
         max_pages=args.max_pages,
         max_steps=args.max_steps,
         resume=args.resume,
+        pack=not args.no_pack,
+        attn_implementation=args.attn,
     )
     print(f"\n{result.summary()}")
     print(f"written to {result.output_dir}")

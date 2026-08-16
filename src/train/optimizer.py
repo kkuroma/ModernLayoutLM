@@ -1,12 +1,8 @@
 """
 Parameter groups for a grafted model
 
-The four layout tables start at zero and have never seen a gradient. The rest of the model has seen
-two trillion tokens. Putting both on one learning rate means either the tables crawl or the backbone
-is damaged, so they get separate rates.
-
-Weight decay is also withheld from the layout tables. Decay pulls them back toward the zero they
-started at, which is exactly the wrong prior for the parameters we are trying to grow.
+The zero-initialized layout tables and the pretrained backbone cannot share one learning rate
+Weight decay is withheld from the layout tables as it pulls them back toward zero
 """
 
 from __future__ import annotations
@@ -15,7 +11,7 @@ from typing import Any
 
 from torch import nn
 
-# Modules whose weights conventionally escape weight decay, plus all biases.
+# Modules whose weights conventionally escape weight decay, plus all biases
 NO_DECAY_SUFFIXES = ("bias", "norm.weight", "LayerNorm.weight")
 
 
@@ -85,7 +81,7 @@ def build_param_groups(
             decayed.append(parameter)
 
     groups = [
-        # Decay is withheld here on purpose: it would pull the tables back toward their zero init.
+        # Decay is withheld here on purpose: it would pull the tables back toward their zero init
         {"params": layout, "lr": layout_learning_rate, "weight_decay": 0.0, "name": "layout"},
         {"params": decayed, "lr": learning_rate, "weight_decay": weight_decay, "name": "backbone"},
         {"params": undecayed, "lr": learning_rate, "weight_decay": 0.0, "name": "no_decay"},

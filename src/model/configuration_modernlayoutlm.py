@@ -1,10 +1,8 @@
 """
 Configuration for ModernLayoutLM
 
-Extends `ModernBertConfig` with the one thing ModernBERT lacks, a coordinate vocabulary size for
-the 2D layout embedding tables. Everything else about the backbone is inherited untouched.
-
-This module is copied into exported model directories, so it must import only from transformers.
+Extends ModernBertConfig with a coordinate vocabulary size and inherits the backbone untouched
+This module is copied into exported model directories and may import only from transformers
 """
 
 from __future__ import annotations
@@ -13,8 +11,7 @@ from typing import Any
 
 from transformers.models.modernbert.configuration_modernbert import ModernBertConfig
 
-# Coordinates are normalized to [0, COORDINATE_SCALE] before lookup, so the table needs at least
-# COORDINATE_SCALE + 1 rows. 1024 is the LayoutLM value and leaves headroom.
+# Size to COORDINATE_SCALE + 1 rows minimum, 1024 matches LayoutLM
 DEFAULT_MAX_2D_POSITION_EMBEDDINGS = 1024
 DEFAULT_COORDINATE_SCALE = 1000
 
@@ -42,8 +39,7 @@ class ModernLayoutLmConfig(ModernBertConfig):
         zero_init_2d: bool = True,
         **kwargs: Any,
     ) -> None:
-        # Grafting reads a ModernBERT config.json, whose "model_type" would otherwise be set as an
-        # instance attribute and shadow the class one, breaking Auto dispatch and re-export.
+        # Set on the class as an instance "model_type" breaks Auto dispatch
         kwargs.pop("model_type", None)
         super().__init__(**kwargs)
         if coordinate_scale >= max_2d_position_embeddings:

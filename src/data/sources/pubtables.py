@@ -1,15 +1,8 @@
 """
-PubTables-1M: ~575k PubMed pages of words and boxes, for layout-aware MLM
+PubTables-1M: PubMed pages of words and boxes, the main pretraining corpus
 
-The main pretraining corpus, and the same one Spatial ModernBERT used. What makes it affordable is
-that only two of its tarballs are needed. `Detection_Page_Words.tar.gz` is 6.5GB and holds the words
-and boxes extracted straight from the PDFs, and `Detection_Filelists.tar.gz` is 10MB and holds the
-splits. The image tarballs, over 90GB of them, are never touched: this model has no image tower.
-
-The boxes are genuinely word level, not line level, so no segment splitting is needed here. They are
-in `image_rect` space, the rendered page in pixels, rather than the `pdf_page_rect` points that also
-appear in each file. Both are recorded per page, and using the wrong one would shrink every
-coordinate by about a fifth.
+Only the word and filelist tarballs are fetched as this model has no image tower
+Boxes are word level and live in image_rect pixel space rather than pdf_page_rect points
 """
 
 from __future__ import annotations
@@ -35,7 +28,7 @@ SPLITS = {
     "test": "test_filelist.txt",
 }
 
-# A page with almost no extractable text is not worth a training sequence.
+# A page with almost no extractable text is not worth a training sequence
 MIN_WORDS = 8
 
 

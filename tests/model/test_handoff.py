@@ -1,11 +1,8 @@
 """
 Tests the handoff from the pretraining stage to fine-tuning
 
-This is the one that would waste the whole layout-MLM run if it broke. `_init_weights` zeroes the
-layout tables for keys missing from a checkpoint, which is exactly what makes grafting work. If it
-also fired for keys that *are* present, every table learned during pretraining would be silently
-reset the moment a downstream head loaded it, and the fine-tuned model would score identically to
-one that never saw the pretraining stage.
+_init_weights zeroes the layout tables only for keys missing from a checkpoint
+Firing on present keys would silently reset everything pretraining had learned
 """
 
 import torch

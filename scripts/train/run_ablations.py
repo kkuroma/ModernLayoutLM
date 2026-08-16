@@ -1,20 +1,8 @@
 """
-Runs the full ablation matrix in one go
+Runs every task against every variant so each control shares the fine-tuning code path
 
-Four variants per task, because a single number proves nothing:
-
-- layout:   ModernLayoutLM after layout-MLM, the real thing
-- nobbox:   the same recipe with boxes withheld, isolating the 2D embeddings
-- skipmlm:  fine-tuned straight off ModernBERT, isolating the pretraining stage
-- layoutlm: microsoft/layoutlm-base-uncased on the identical processed parquet
-
-Every variant goes through the same `finetune` code path, so a control is never an approximation
-of the recipe it controls for. Runs are resumable: one that already wrote `result.json` is skipped
-unless `--force` is given, so an interrupted matrix picks up where it stopped.
-
-    uv run python scripts/train/run_ablations.py --dry-run
-    uv run python scripts/train/run_ablations.py
-    uv run python scripts/train/run_ablations.py --dataset funsd cord --variant layout nobbox
+Variants are layout, nobbox, skipmlm and the LayoutLM baseline
+A variant that already wrote result.json is skipped unless --force is given
 """
 
 from __future__ import annotations
@@ -31,7 +19,7 @@ from src.train import RunSpec, finetune
 
 LAYOUTLM_BASELINE = "microsoft/layoutlm-base-uncased"
 
-DATASETS = ["funsd", "cord", "sroie", "rvlcdip"]
+DATASETS = ["funsd", "cord", "sroie"]
 VARIANTS = ["layout", "nobbox", "skipmlm", "layoutlm"]
 
 

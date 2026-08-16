@@ -1,20 +1,8 @@
 """
-PDFA: ~16.7M born-digital PDF pages with word-level text and boxes
+PDFA: born-digital PDF pages read from the JSON in each webdataset shard, never from the PDF itself
 
-The diversity half of the corpus. PubTables is PubMed, IDL is scanned business documents, and
-PDFA is everything else the web hosts as a PDF: invoices, manuals, forms, reports, government
-filings. Filtered from the SafeDocs CommonCrawl corpus, so the layouts are genuinely varied rather
-than one publisher's template.
-
-Two format details matter.
-
-Boxes are normalized `(x, y, width, height)` in `[0, 1]`, not `(x0, y0, x1, y1)`. A value like
-`[0.288, 0.090, 0.060, 0.021]` has a third element far smaller than the first, which is the giveaway
-that it is a width. Reading it as a corner would produce inverted boxes on nearly every word, the
-same trap DocLayNet sets with its COCO boxes.
-
-The shards are webdataset tars holding a `.json` and a `.pdf` per document. Only the JSON is read,
-so the PDFs are never decoded, and one document holds many pages.
+Boxes arrive as normalized (x, y, width, height) rather than corners
+Low-confidence words are dropped and a deterministic tail of shards is held out
 """
 
 from __future__ import annotations
@@ -30,16 +18,15 @@ from ..schema import DatasetMeta, Document
 
 REPO = "pixparse/pdfa-eng-wds"
 
-# Shards are named pdfa-eng-train-NNNN.tar. The release ships no validation or test split, so a
-# deterministic tail of the shards is held out rather than sampling rows.
+# Hold out a deterministic tail of shards as no validation split ships
 SPLITS = {"train": "train", "validation": "validation", "test": "test"}
 VALIDATION_SHARDS = 4
 TEST_SHARDS = 4
 
-# OCR confidence below this is usually a misread glyph rather than a word.
+# OCR confidence below this is usually a misread glyph rather than a word
 MIN_SCORE = 0.5
 
-# A page with almost no extractable text is not worth a training sequence.
+# A page with almost no extractable text is not worth a training sequence
 MIN_WORDS = 8
 
 
@@ -101,7 +88,7 @@ def load(split: str, cache_dir: str | None = None) -> Iterator[Document]:
             "No PDFA shards found. Download pixparse/pdfa-eng-wds into the raw cache first."
         )
 
-    # Held out by shard so a document never straddles two splits.
+    # Held out by shard so a document never straddles two splits
     if split == "validation":
         chosen = shards[-(VALIDATION_SHARDS + TEST_SHARDS) : -TEST_SHARDS]
     elif split == "test":
@@ -178,7 +165,7 @@ def _build(doc_id: str, page: dict[str, Any]) -> Document | None:
         if position < len(scores) and scores[position] < MIN_SCORE:
             continue
         x, y, width, height = (float(value) for value in raw)
-        # Normalized xywh in [0, 1] to xyxy on the canonical grid.
+        # Normalized xywh in [0, 1] to xyxy on the canonical grid
         box = [
             x * COORDINATE_SCALE,
             y * COORDINATE_SCALE,
@@ -195,8 +182,7 @@ def _build(doc_id: str, page: dict[str, Any]) -> Document | None:
         source="pdfa",
         words=words,
         bboxes=boxes,
-        # Boxes arrive already normalized, so there is no pixel page size to record. The grid
-        # itself is the page, which keeps the rendering path in inspect_dataset.py meaningful.
+        # Use the grid as the page since boxes arrive normalized
         page_width=COORDINATE_SCALE,
         page_height=COORDINATE_SCALE,
     )

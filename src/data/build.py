@@ -1,10 +1,8 @@
 """
 Turning a raw source into validated canonical parquet
 
-One entrypoint, `build_source`, drives any adapter: stream its documents, validate every one,
-write parquet per split, then write the label sidecar. Validation is deliberately fatal. A source
-that produces a misaligned document is a source we do not understand yet, and training on it would
-waste a GPU day to produce a number nobody can interpret.
+One entrypoint drives any adapter: stream, validate, write parquet, write the sidecar
+Validation is deliberately fatal as a source producing a misaligned document is not understood yet
 """
 
 from __future__ import annotations
@@ -19,7 +17,7 @@ from .sources import get_source
 
 logger = logging.getLogger(__name__)
 
-# Documents per parquet file. Keeps single files readable while avoiding thousands of tiny ones.
+# Keeps a single parquet file readable while avoiding thousands of tiny ones
 SHARD_SIZE = 20_000
 
 

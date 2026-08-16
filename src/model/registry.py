@@ -1,13 +1,8 @@
 """
 Registering ModernLayoutLM with the Auto factories
 
-Two mechanisms, for two situations. `register_modernlayoutlm` teaches the `Auto*` classes about
-ModernLayoutLM inside the current process, which is what training scripts need. `AUTO_MAP` is
-written into an exported `config.json` so that a process which has never imported this package can
-still load the model with `trust_remote_code=True`.
-
-This module is copied into exported model directories, so it must import only from transformers,
-and may reference its siblings only by relative import.
+register_modernlayoutlm covers the current process and AUTO_MAP covers an exported directory
+This module is copied into exported model directories and may import only from transformers
 """
 
 from __future__ import annotations
@@ -28,7 +23,7 @@ from .modeling_modernlayoutlm import (
     ModernLayoutLmModel,
 )
 
-# Values are "<module file stem>.<class name>", resolved relative to the exported directory.
+# Values are "<module file stem>.<class name>", resolved relative to the exported directory
 AUTO_MAP = {
     "AutoConfig": "configuration_modernlayoutlm.ModernLayoutLmConfig",
     "AutoModel": "modeling_modernlayoutlm.ModernLayoutLmModel",

@@ -1,9 +1,8 @@
 """
 Tests for sequence packing
 
-Packing is a throughput optimization, so the thing to guard is that it changes only *where* tokens
-sit, never which box belongs to which token. A packer that drifts boxes by one position would
-speed training up and quietly train the model on the wrong layout.
+Packing may change where a token sits and never which box belongs to it
+A packer that drifts boxes by one position would speed training up and train on the wrong layout
 """
 
 import pytest
@@ -65,7 +64,7 @@ def test_an_over_length_page_gets_its_own_sequence() -> None:
     packed = list(pack_encodings(iter([page(10, 3), page(500, 40)]), 16, SEP, PAD))
     assert len(packed) == 2
     assert packed[0]["input_ids"][:3] == [10, 11, 12]
-    # The long page starts its own sequence rather than continuing the first.
+    # The long page starts its own sequence rather than continuing the first
     assert packed[1]["input_ids"][0] == 500
 
 
@@ -99,12 +98,29 @@ def test_empty_pages_are_skipped() -> None:
     assert packed[0]["input_ids"][0] == 10
 
 
-def test_efficiency_matches_the_padding_fraction() -> None:
-    """The reported speedup is exactly the reciprocal of the fill rate."""
-    assert packing_efficiency(512, 512) == pytest.approx(1.0)
-    assert packing_efficiency(380, 512) == pytest.approx(512 / 380)
-    assert packing_efficiency(380, 1024) == pytest.approx(1024 / 380)
-    # A page longer than the window is already full, so packing buys nothing.
-    assert packing_efficiency(2000, 512) == pytest.approx(1.0)
+def test_efficiency_is_measured_against_overflow_chunking() -> None:
+    """The baseline is chunking, not one padded window per page."""
+    assert packing_efficiency([512] * 8, 512) == pytest.approx(1.0)
+    assert packing_efficiency([380] * 8, 512) == pytest.approx(512 / 380)
+    assert packing_efficiency([380] * 8, 1024) == pytest.approx(1024 / 380)
+
+
+def test_long_pages_barely_benefit_from_packing() -> None:
+    """
+    A page that overruns the window is chunked into near-full windows already
+
+    This is the correction to the earlier model, which treated every page as one padded window and
+    so claimed 2.7x where the real figure on a long-page corpus is a few percent.
+    """
+    # 1000 tokens at 512 costs two windows, of which only the second is half empty
+    assert packing_efficiency([1000] * 8, 512) == pytest.approx(1024 / 1000)
+    # Mixing one short page in recovers only that page's padding
+    assert packing_efficiency([1000, 100], 512) == pytest.approx((1024 + 512) / 1100)
+
+
+def test_efficiency_rejects_an_empty_corpus() -> None:
+    """No tokens means no ratio to report, rather than a division by zero."""
     with pytest.raises(ValueError):
-        packing_efficiency(0, 512)
+        packing_efficiency([], 512)
+    with pytest.raises(ValueError):
+        packing_efficiency([100], 0)

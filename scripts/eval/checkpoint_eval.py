@@ -1,19 +1,8 @@
 """
-Scores a mid-run pretraining checkpoint on the contamination-free benchmarks
+Scores a mid-run pretraining checkpoint so a stalled run is caught within a day
 
-Intended to run once a day during a multi-day pretraining job, so a run that has stopped learning
-is caught on day two rather than day four.
-
-Only CORD and SROIE are used. FUNSD and RVL-CDIP both descend from IIT-CDIP, the same library as
-the IDL pretraining corpus, so their scores would flatter a model that had merely memorized pages
-it will later be tested on. The Bates filter removes the overlap it can detect, but it cannot prove
-the overlap is gone, and a progress signal is worth nothing if it is not trustworthy.
-
-Results are written per checkpoint step, so the series can be plotted against pretraining loss.
-
-    uv run python scripts/eval/checkpoint_eval.py \
-        --checkpoint data/checkpoints/wide/checkpoint-40000
-    uv run python scripts/eval/checkpoint_eval.py --checkpoint ... --epochs 10
+Only CORD and SROIE are scored as they are independent of the IDL pretraining corpus
+Results are keyed by checkpoint step so the series plots against pretraining loss
 """
 
 from __future__ import annotations
@@ -28,11 +17,10 @@ from pathlib import Path
 from src.config import load_config
 from src.train import RunSpec, finetune
 
-# Independent of IIT-CDIP, so a score here cannot be inflated by pretraining contamination.
+# Independent of IIT-CDIP, so a score here cannot be inflated by pretraining contamination
 CLEAN_TASKS = ["cord", "sroie"]
 
-# Fewer epochs than the headline runs. This is a trend signal between checkpoints, not a number
-# to publish, and 30 epochs twice a day would cost most of a GPU hour every day.
+# Use fewer epochs as this only tracks the trend between checkpoints
 PROBE_EPOCHS = 12
 
 
@@ -123,8 +111,7 @@ def main() -> int:
         entry["failed"] = failures
     if tasks:
         entry["mean"] = sum(tasks.values()) / len(tasks)
-    # Only record a probe that produced at least one score. An entry of all zeros would plot as a
-    # collapse rather than as a missing measurement.
+    # Skip empty probes as all-zero entries plot as a collapse
     if tasks:
         series.append(entry)
     else:

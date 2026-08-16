@@ -1,22 +1,8 @@
 """
-Keeping benchmark documents out of the pretraining corpus
+Excludes benchmark documents out of the pre-training corpus using the document's Bates number
 
-FUNSD and RVL-CDIP are both descended from IIT-CDIP, which is itself drawn from the UCSF Industry
-Documents Library. Pretraining on IDL therefore risks training on the very pages we later evaluate
-on, which is the flaw that makes some published numbers in this area hard to interpret.
-
-Matching by identifier does not work: IDL keys pages by UCSF tid (`ffbb0000`) while RVL-CDIP names
-them by Bates number (`10345348_10345354`). Matching by text does not work either, because the two
-releases were OCR'd by different engines, so the same page yields different tokens.
-
-What does survive both problems is the Bates number itself. These documents carry it printed on the
-page, so it appears in the OCR of any release. Extracting the Bates numbers from the benchmark file
-names gives a fingerprint set, and any pretraining page whose OCR contains one is dropped.
-
-The filter over-drops slightly, since a Bates number can appear on a neighboring page of the same
-document, which is the right direction to err. It also under-detects when OCR mangles the number,
-so this reduces contamination rather than proving its absence. CORD and SROIE are independent of
-IIT-CDIP entirely and need no filtering.
+FUNSD and RVL-CDIP descended from IIT-CDIP which is drawn from UCSF Industry Document Library
+Some pages from FUNSD and RVL-CDIP may be included in IDL
 """
 
 from __future__ import annotations
@@ -25,12 +11,11 @@ import json
 import re
 from pathlib import Path
 
-# Bates numbers are long digit runs. Seven is short enough to catch the real ones and long enough
-# that ordinary numbers on a page, years, amounts, phone fragments, do not collide.
+# Require 7 digits as shorter runs collide with years and amounts
 MIN_BATES_DIGITS = 7
 
-# Non-digits are stripped before comparison, so "2031316091." and "2031316091" both match.
-_DIGITS = re.compile(r"\D")
+# Match digit runs as stripping non-digits glued "1011-1019." into one number
+_DIGIT_RUN = re.compile(r"\d+")
 
 FINGERPRINT_FILE = "eval_fingerprints.json"
 
@@ -58,17 +43,17 @@ def page_bates(tokens: list[str]) -> set[str]:
         tokens: The page's words.
 
     Returns:
-        Every token that reduces to a long enough digit run.
+        Every long enough digit run appearing in any token.
     """
     found: set[str] = set()
     for token in tokens:
         text = str(token)
-        # Cheap guard first: most tokens are not mostly digits, and this runs over billions.
+        # Cheap guard first: most tokens are too short to hold one, and this runs over billions
         if len(text) < MIN_BATES_DIGITS:
             continue
-        digits = _DIGITS.sub("", text)
-        if len(digits) >= MIN_BATES_DIGITS:
-            found.add(digits)
+        for run in _DIGIT_RUN.findall(text):
+            if len(run) >= MIN_BATES_DIGITS:
+                found.add(run)
     return found
 
 

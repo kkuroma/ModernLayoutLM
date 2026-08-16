@@ -1,13 +1,7 @@
 """
 Fine-tunes a model on one downstream dataset
 
-Handles the real runs and the ablation controls through the same code path, so a control is never
-an approximation of the real recipe.
-
-    uv run python scripts/train/finetune.py --dataset funsd
-    uv run python scripts/train/finetune.py --dataset funsd --no-bbox
-    uv run python scripts/train/finetune.py --dataset cord --backbone data/checkpoints/pretrain-base
-    uv run python scripts/train/finetune.py --dataset funsd --epochs 1 --limit-steps 20
+Real runs and ablation controls share the code path so a control is never an approximation
 """
 
 from __future__ import annotations

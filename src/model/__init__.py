@@ -1,12 +1,8 @@
 """
-The ModernLayoutLM model: config, modeling code and processor
+The ModernLayoutLM model: config, modelling code and processor
 
-`register_modernlayoutlm` wires the classes into the `Auto*` factories for the current process.
-Exported model directories carry an `auto_map` instead, so a fresh process can load them with
-`trust_remote_code=True` without importing this package at all.
-
-Every module in this package is copied verbatim into exported model directories, so nothing here
-may import from `src`.
+register_modernlayoutlm covers the current process and an exported auto_map covers a fresh one
+Every module here is copied verbatim into exported directories, so nothing may import from src
 """
 
 from .configuration_modernlayoutlm import ModernLayoutLmConfig

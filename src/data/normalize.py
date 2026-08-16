@@ -1,19 +1,18 @@
 """
 Primitives for turning source coordinates into our canonical form
 
-Every dataset expresses layout differently: pixels, four-corner quads, line-level boxes, or
-already-normalized coordinates on an unstated scale. These helpers are the shared vocabulary the
-adapters use so that the conversion rules live in one place and are tested once.
+Sources arrive as pixels, four-corner quads, line-level boxes or coordinates on an unstated scale
+The conversion rules live here so they are written once and tested once
 """
 
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
 
-# The canonical coordinate scale. Boxes are integers in [0, COORDINATE_SCALE].
+# Boxes are integers on this canonical scale
 COORDINATE_SCALE = 1000
 
-# A four-corner quad as CORD stores it: corners 1 to 4 clockwise from the top left.
+# A four-corner quad as CORD stores it: corners 1 to 4 clockwise from the top left
 QUAD_KEYS = ("x1", "y1", "x2", "y2", "x3", "y3", "x4", "y4")
 
 
@@ -122,7 +121,7 @@ def split_segment(text: str, box: Sequence[float]) -> list[tuple[str, list[float
 
     x0, y0, x1, y1 = box
     span = x1 - x0
-    # Character budget includes one space between each pair of words, matching the source text.
+    # Character budget includes one space between each pair of words, matching the source text
     total = sum(len(word) for word in words) + (len(words) - 1)
     if span <= 0 or total <= 0:
         return [(word, list(box)) for word in words]

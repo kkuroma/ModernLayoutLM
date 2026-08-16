@@ -1,9 +1,8 @@
 """
 Tests for box and label alignment across subwords
 
-Misalignment here is the quietest possible failure. A model trained on boxes shifted by one word
-still trains, still reports a falling loss, and is simply wrong. So these tests check the
-correspondence directly rather than just checking shapes.
+A model trained on boxes shifted by one word still trains and still reports a falling loss
+These check the correspondence directly rather than checking shapes
 """
 
 from pathlib import Path

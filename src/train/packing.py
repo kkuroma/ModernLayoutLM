@@ -1,46 +1,52 @@
 """
-Packing pages into full sequences, so padding stops burning GPU time
+Pre-pack pages into full sequence length to avoid wasting GPU time
 
-Pretraining pads every chunk to `max_length`. Pages average roughly 380 tokens, so at 512 about a
-quarter of every batch is padding and at 1024 nearly two thirds of it is. That padding costs the
-same attention and MLP work as real text and teaches the model nothing.
-
-Packing concatenates consecutive pages until a sequence is full, so almost every position carries
-a real token. The measured saving is the padding fraction: about 1.35x at 512 and 2.7x at 1024,
-which is the difference between a five day pretraining run and a two day one.
-
-Pages are separated by the tokenizer's separator, and each page keeps its own boxes. Attention is
-not masked between packed pages, which is the standard trade in pretraining pipelines: a rare
-spurious cross-page attention costs far less than throwing away two thirds of the compute.
+The time saved scales up with context length
 """
 
 from __future__ import annotations
 
 from collections.abc import Iterable, Iterator, Mapping
+from math import ceil
 from typing import Any
 
-# Boxes for the separator between two packed pages, and for trailing padding.
+# Boxes for the separator between two packed pages, and for trailing padding
 SEPARATOR_BOX = [1000, 1000, 1000, 1000]
 PAD_BOX = [0, 0, 0, 0]
 
 
-def packing_efficiency(page_tokens: float, max_length: int) -> float:
+def packing_efficiency(page_tokens: Iterable[int], max_length: int) -> float:
     """
-    Reports the speedup packing buys at a given page length and sequence length
+    Reports the speedup packing buys over overflow chunking, from a length distribution
+
+    The comparison is against what the pipeline actually does without packing, which is to chunk an
+    over-length page into several full windows rather than truncating it. A page of 900 tokens at
+    512 costs two windows, not one, and the first of those is completely full. Taking the mean page
+    length and dividing it into `max_length` ignores that and overstates the gain, which is the
+    error behind the retracted two-day estimate.
 
     Args:
-        page_tokens: Mean tokens per page.
+        page_tokens: Token count of every page, before padding or chunking.
         max_length: Sequence length being trained at.
 
     Returns:
-        The ratio of padded cost to packed cost, so 2.0 means packing halves the work.
+        The ratio of chunked cost to packed cost, so 2.0 means packing halves the work.
 
     Raises:
-        ValueError: If either argument is not positive.
+        ValueError: If `max_length` is not positive, or no page has any tokens.
     """
-    if page_tokens <= 0 or max_length <= 0:
-        raise ValueError("page_tokens and max_length must both be positive")
-    return max_length / min(page_tokens, max_length)
+    if max_length <= 0:
+        raise ValueError("max_length must be positive")
+    real = 0
+    chunked = 0
+    for tokens in page_tokens:
+        if tokens <= 0:
+            continue
+        real += tokens
+        chunked += max_length * ceil(tokens / max_length)
+    if real == 0:
+        raise ValueError("no page carried any tokens")
+    return chunked / real
 
 
 def pack_encodings(
@@ -82,8 +88,7 @@ def pack_encodings(
         if not page_ids:
             continue
 
-        # An over-length page is its own sequence. Splitting it across a pack boundary would put
-        # half a page next to an unrelated one, which is worse than truncating.
+        # Leave over-length pages independent to avoid contamination
         if len(page_ids) >= max_length:
             if ids:
                 yield _finish(ids, boxes, max_length, pad_id)

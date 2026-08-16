@@ -1,19 +1,8 @@
 """
-DocLayNet v1.2: 80k human-annotated pages across six document domains
+DocLayNet: human-annotated pages across six domains, used for its text rather than its layout labels
 
-Used for layout-aware MLM, not for its layout labels. The value here is domain diversity: finance,
-law, manuals, patents, tenders and science, where PubTables-1M is PubMed only.
-
-Two things make this adapter unusual.
-
-The dataset is 40GB because every row bundles the page image and the source PDF alongside the text.
-We need neither. Reading the remote parquet through pyarrow with column projection skips those
-column chunks entirely, and `image` plus `pdf` are 99 percent of the bytes, so the transfer drops
-from 40GB to a few hundred megabytes.
-
-And `pdf_cells[].bbox` is COCO `(x, y, width, height)` in a 1025-square space, not `(x0, y0, x1,
-y1)`. Reading it as the latter violates the box invariants on 20568 of 20569 sampled cells, which
-is how the format was pinned down.
+Only the text columns are projected out of the remote parquet as the image and PDF are the bulk
+Cell boxes are COCO (x, y, width, height) on a 1025-square rather than corners
 """
 
 from __future__ import annotations
@@ -30,16 +19,16 @@ from ..schema import DatasetMeta, Document
 REPO = "docling-project/DocLayNet-v1.2"
 GLOB = f"datasets/{REPO}/**/*.parquet"
 
-# Parquet shards are named by split, so the split is read off the filename.
+# Parquet shards are named by split, so the split is read off the filename
 SPLITS = {"train": "train-", "validation": "validation-", "test": "test-"}
 
-# Only these two columns are fetched. The rest, image and pdf above all, are never transferred.
+# The image and pdf columns are never transferred
 COLUMNS = ["pdf_cells", "metadata"]
 
-# Rows per read. Larger batches mean fewer round trips against the remote file.
+# Larger batches mean fewer round trips against the remote file
 BATCH_SIZE = 64
 
-# A page with almost no extractable text is not worth a training sequence.
+# A page with almost no extractable text is not worth a training sequence
 MIN_WORDS = 8
 
 
@@ -162,8 +151,7 @@ def _unique_cells(groups: list[Any]) -> list[tuple[list[float], str]]:
             seen.add(key)
             cells.append(([x, y, x + box_width, y + box_height], text))
 
-    # Reading order top to bottom then left to right, which is the order the model's 1D positions
-    # will imply. Without it, cells arrive grouped by region and jump around the page.
+    # Sort to reading order as cells arrive grouped by region
     cells.sort(key=lambda pair: (round(pair[0][1], 1), pair[0][0]))
     return cells
 

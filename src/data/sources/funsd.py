@@ -1,9 +1,8 @@
 """
-FUNSD: form understanding, 199 scanned forms, 7 BIO labels
+FUNSD: form understanding over scanned forms, with per-word boxes and BIO tags
 
-The cleanest source in the collection. `nielsr/funsd-layoutlmv3` already ships words, per-word
-boxes and BIO tags, and its boxes are already on the 0-1000 scale despite the images being stored
-at their own pixel sizes. That last point is checked rather than assumed.
+`nielsr/funsd` mirrors the official release, one box per word, which is what the papers score on
+The `funsd-layoutlmv3` mirror is segment level and hands the model every entity boundary for free
 """
 
 from __future__ import annotations
@@ -16,7 +15,7 @@ from datasets import Dataset, load_dataset
 from ..normalize import COORDINATE_SCALE, clamp_box
 from ..schema import DatasetMeta, Document
 
-REPO = "nielsr/funsd-layoutlmv3"
+REPO = "nielsr/funsd"
 SPLITS = {"train": "train", "test": "test"}
 
 
@@ -39,7 +38,7 @@ def describe() -> DatasetMeta:
             "B-ANSWER",
             "I-ANSWER",
         ],
-        notes="Boxes arrive already normalized to 0-1000; verified, not rescaled.",
+        notes="Official word-level release, 1.00 words per box. Boxes arrive on 0-1000, verified.",
     )
 
 
@@ -67,7 +66,7 @@ def load(split: str, cache_dir: str | None = None) -> Iterator[Document]:
         yield Document(
             doc_id=f"funsd-{split}-{row['id']}",
             source="funsd",
-            words=list(row["tokens"]),
+            words=list(row["words"]),
             bboxes=boxes,
             page_width=width,
             page_height=height,

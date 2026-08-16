@@ -1,16 +1,8 @@
 """
 Collects finished runs into one results table
 
-Reads the `result.json` each fine-tuning run writes and renders a markdown and JSON table grouped
-by task. Four variants per task, because a single number proves nothing on its own:
-
-- layout: ModernLayoutLM after layout-MLM, the real thing
-- nobbox: identical recipe with the boxes withheld, isolating the 2D embeddings
-- skipmlm: fine-tuned straight off ModernBERT, isolating the pretraining stage
-- layoutlm: microsoft/layoutlm-base-uncased on the identical processed data
-
-    uv run python scripts/eval/evaluate.py
-    uv run python scripts/eval/evaluate.py --runs data/checkpoints/finetune --out notebooks/results
+Reads the result.json each fine-tuning run writes and renders it as markdown and JSON per task
+The document is tables only, so a reader draws the comparison rather than being told it
 """
 
 from __future__ import annotations
@@ -22,16 +14,21 @@ from typing import Any
 
 from src.config import load_config
 
-# The metric each task is judged on, and whether more is better.
-HEADLINE = {
-    "token": "f1",
-    "sequence": "accuracy",
-}
+# Column order in the rendered table, when the metric is present
+COLUMNS = [
+    "f1",
+    "precision",
+    "recall",
+    "hmean",
+    "field_precision",
+    "field_recall",
+    "accuracy",
+    "macro_f1",
+    "token_accuracy",
+    "loss",
+]
 
-# Column order in the rendered table, when the metric is present.
-COLUMNS = ["f1", "precision", "recall", "accuracy", "macro_f1", "token_accuracy", "loss"]
-
-# Row order, strongest claim first, so the table reads as an argument rather than a dump.
+# Row order, ours first, then the baseline, then the two controls
 VARIANT_ORDER = ["layout", "layoutlm", "skipmlm", "nobbox", "plain"]
 
 WHAT_EACH_VARIANT_IS = {
@@ -132,8 +129,8 @@ def _variant(spec: dict[str, Any]) -> str:
     if name.startswith("layoutlm"):
         return "layoutlm"
 
-    # A run starting from the raw backbone never saw the layout-MLM stage.
-    pretrained = "pretrain" in name
+    # Key on the backbone, not the run name, as "wide" read as skipmlm
+    pretrained = not name.startswith("modernbert")
     if spec.get("use_bbox", True):
         return "layout" if pretrained else "skipmlm"
     return "nobbox" if pretrained else "plain"
@@ -149,7 +146,7 @@ def _render(results: list[dict[str, Any]]) -> str:
     Returns:
         A markdown document.
     """
-    lines = ["# Results", ""]
+    lines = ["# Downstream results", "", *_variant_table(), ""]
     tasks = sorted({record["task"] for record in results})
 
     for task in tasks:
@@ -157,9 +154,9 @@ def _render(results: list[dict[str, Any]]) -> str:
         present = [
             column for column in COLUMNS if any(column in record["metrics"] for record in rows)
         ]
-        lines.append(f"## {task}")
+        lines.append(f"## {task}, by variant")
         lines.append("")
-        lines.append("| variant | " + " | ".join(present) + " | what it is |")
+        lines.append("| variant | " + " | ".join(present) + " | train chunks |")
         lines.append("|---" * (len(present) + 2) + "|")
         ordered = sorted(
             rows,
@@ -172,66 +169,25 @@ def _render(results: list[dict[str, Any]]) -> str:
                 f"{record['metrics'][column]:.4f}" if column in record["metrics"] else "-"
                 for column in present
             ]
-            note = WHAT_EACH_VARIANT_IS.get(record["variant"], "")
-            lines.append(f"| {record['variant']} | " + " | ".join(cells) + f" | {note} |")
-        lines.append("")
-        lines.extend(_verdict(task, rows))
+            train = record["train_examples"]
+            lines.append(f"| {record['variant']} | " + " | ".join(cells) + f" | {train} |")
         lines.append("")
 
     return "\n".join(lines)
 
 
-def _verdict(task: str, rows: list[dict[str, Any]]) -> list[str]:
+def _variant_table() -> list[str]:
     """
-    States plainly whether layout beat the controls on this task
-
-    The point of the table is this comparison, so it is spelled out rather than left to the reader.
-    A null or negative result is reported as such.
-
-    Args:
-        task: The task name.
-        rows: Run records for this task.
+    Renders the legend naming what each variant is
 
     Returns:
-        Markdown lines describing the outcome.
+        Markdown lines for the variant table.
     """
-    by_variant = {record["variant"]: record for record in rows}
-    layout = by_variant.get("layout") or by_variant.get("skipmlm")
-    if layout is None:
-        return ["No layout run for this task yet."]
-
-    metric = HEADLINE.get(_task_kind(layout), "f1")
-    if metric not in layout["metrics"]:
-        return [f"No {metric} recorded for the layout run."]
-    score = layout["metrics"][metric]
-
-    lines = []
-    for name, label in (
-        ("plain", "plain ModernBERT"),
-        ("layoutlm", "layoutlm-base-uncased"),
-        ("skipmlm", "the same model without the layout-MLM stage"),
-    ):
-        other = by_variant.get(name)
-        if other is None or metric not in other["metrics"]:
-            lines.append(f"- {label}: not run")
-            continue
-        delta = score - other["metrics"][metric]
-        verdict = "beats" if delta > 0 else "does not beat"
-        lines.append(f"- {verdict} {label} by {delta:+.4f} {metric}")
+    lines = ["## Variants", "", "| variant | backbone and boxes |", "|---|---|"]
+    for name in VARIANT_ORDER:
+        if name in WHAT_EACH_VARIANT_IS:
+            lines.append(f"| {name} | {WHAT_EACH_VARIANT_IS[name]} |")
     return lines
-
-
-def _task_kind(record: dict[str, Any]) -> str:
-    """
-    Guesses whether a run was a token or sequence task from its metrics
-
-    Args:
-        record: A run record.
-
-    Returns:
-        "token" or "sequence".
-    """
-    return "token" if "f1" in record["metrics"] else "sequence"
 
 
 if __name__ == "__main__":

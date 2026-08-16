@@ -1,12 +1,8 @@
 """
-A masked language modeling collator that keeps the boxes
+A masked language modelling collator that keeps the boxes
 
-`DataCollatorForLanguageModeling` builds its batch from `input_ids` and drops everything it does
-not recognize, `bbox` included. Feeding it our data would train a layout model on no layout while
-reporting a perfectly healthy falling loss, so the collator is replaced rather than wrapped.
-
-The objective is LayoutLM's MVLM: mask the text and leave the boxes untouched, so recovering a
-masked token requires reading its position on the page.
+The stock collator drops any column it does not recognize, so a layout model would train on none
+Text is masked and boxes are left untouched, so recovering a token rewards reading its position
 """
 
 from __future__ import annotations
@@ -17,8 +13,7 @@ from typing import Any
 import torch
 from transformers.tokenization_utils_base import PreTrainedTokenizerBase
 
-# Of the tokens chosen for masking, BERT's original split: replace most, randomize a few, keep the
-# rest. ModernBERT keeps this split and only raises the overall rate.
+# Keep BERT's split as ModernBERT raises only the overall rate
 REPLACE_FRACTION = 0.8
 RANDOM_FRACTION = 0.5
 

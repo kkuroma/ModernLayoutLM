@@ -1,8 +1,8 @@
 """
 Tests for the coordinate primitives
 
-These are the functions every adapter leans on, so a bug here corrupts every dataset at once
-rather than just one. They are also pure and cheap, which makes them worth testing thoroughly.
+Every adapter leans on these, so a bug here corrupts every dataset at once rather than just one
+They are pure and cheap, which makes them worth testing thoroughly
 """
 
 import pytest

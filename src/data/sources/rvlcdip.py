@@ -1,19 +1,13 @@
 """
-RVL-CDIP: document image classification, 400k pages, 16 classes
+RVL-CDIP: document image classification read from an OCR mirror rather than the images
 
-The standard release ships images only, and OCR-ing 400k scans is a day of compute we do not need
-to spend. `jordyvl/rvl_cdip_easyocr` already carries EasyOCR output for every page, so this adapter
-reads that instead.
-
-Two things about it need handling. It is a legacy loading-script dataset, so the `.npy` payloads are
-downloaded and unpickled directly rather than going through `load_dataset`. And its "word-level"
-annotations are really segment level: an entry's text is often a phrase like
-"Plasminogen Activator Activity in" sharing one box, so segments are split into words with their
-box divided along x.
+The payloads are legacy .npy files, unpickled directly instead of through load_dataset
+Annotations are segment level, so segments are split into words with their box divided along x
 """
 
 from __future__ import annotations
 
+import logging
 from collections.abc import Iterator
 from pathlib import Path
 from typing import Any
@@ -21,8 +15,11 @@ from typing import Any
 import numpy as np
 from huggingface_hub import hf_hub_download
 
+from ..contamination import Fingerprints
 from ..normalize import normalize_box, split_segment
 from ..schema import DatasetMeta, Document
+
+logger = logging.getLogger(__name__)
 
 REPO = "jordyvl/rvl_cdip_easyocr"
 SPLITS = {
@@ -77,8 +74,22 @@ CLASS_NAMES = [
 ]
 _CLASS_INDEX = {name: index for index, name in enumerate(SOURCE_LABELS)}
 
-# Pages with almost no OCR text carry no signal and only waste sequence budget.
+# Pages with almost no OCR text carry no signal and only waste sequence budget
 MIN_WORDS = 4
+
+"""
+Where the benchmark fingerprints live, and which split gets filtered against them
+
+Only the training split. The evaluation splits are the benchmark, so filtering them against
+themselves would delete the thing being measured.
+
+The training split needs it because RVL-CDIP is a page-level sample of IIT-CDIP documents, so a
+multi-page document can have one page in train and its neighbour in test, and because FUNSD's forms
+were drawn from RVL-CDIP without regard to this split. A Bates number printed on one page usually
+appears on the others of the same document, which is what makes the neighbours detectable at all.
+"""
+FINGERPRINT_DIR = Path("data/raw/idl")
+FILTERED_SPLITS = {"train"}
 
 
 def describe() -> DatasetMeta:
@@ -110,17 +121,26 @@ def load(split: str, cache_dir: str | None = None) -> Iterator[Document]:
         cache_dir: Hugging Face cache directory, or None for the default.
 
     Yields:
-        One Document per page that has enough OCR text.
+        One Document per page that has enough OCR text and carries no benchmark Bates number.
 
     Raises:
         KeyError: If `split` is not a known split.
     """
     path = Path(hf_hub_download(REPO, SPLITS[split], repo_type="dataset", cache_dir=cache_dir))
     entries = np.load(path, allow_pickle=True)
+    filtered = split in FILTERED_SPLITS
+    fingerprints = Fingerprints.read(FINGERPRINT_DIR) if filtered else Fingerprints()
+    dropped = 0
     for index, entry in enumerate(entries):
         document = _build(f"rvlcdip-{split}-{index}", entry)
-        if document is not None:
-            yield document
+        if document is None:
+            continue
+        if fingerprints.contaminated(document.words) is not None:
+            dropped += 1
+            continue
+        yield document
+    if dropped:
+        logger.info("%s: dropped %d contaminated pages", split, dropped)
 
 
 def _build(doc_id: str, entry: dict[str, Any]) -> Document | None:

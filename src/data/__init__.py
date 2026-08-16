@@ -1,12 +1,8 @@
 """
 Stage 1: acquiring datasets and reducing them to one canonical schema
 
-Raw sources disagree about everything: pixels or normalized coordinates, four-corner quads or
-axis-aligned boxes, per-word or per-line boxes, named labels or bare integers with no key. This
-stage absorbs all of that so no later stage has to.
-
-The output is `Document` rows in parquet plus a `DatasetMeta` sidecar carrying the label
-vocabulary, which is never inferred from whichever rows happen to be present.
+Sources disagree about coordinate space, box granularity and label naming, and this absorbs it
+The output is Document rows in parquet with a sidecar carrying the label vocabulary
 """
 
 from .build import BuildReport, build_source

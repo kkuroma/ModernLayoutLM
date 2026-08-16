@@ -1,8 +1,7 @@
 """
 Tests for the parameter grouping
 
-An empty layout group is the cheapest possible signal that the graft did not happen, so it is worth
-asserting rather than eyeballing in a log line.
+An empty layout group is the cheapest signal that the graft did not happen, so it is asserted here
 """
 
 import pytest
@@ -39,7 +38,7 @@ def test_groups_split_layout_from_backbone(tiny_config: ModernLayoutLmConfig) ->
     assert set(by_name) == {"layout", "backbone", "no_decay"}
     assert by_name["layout"]["lr"] == 1e-3
     assert by_name["backbone"]["lr"] == 5e-5
-    # Decay would pull the tables back toward the zero they were initialized to.
+    # Decay would pull the tables back toward the zero they were initialized to
     assert by_name["layout"]["weight_decay"] == 0.0
     assert by_name["backbone"]["weight_decay"] == 0.01
     assert by_name["no_decay"]["weight_decay"] == 0.0

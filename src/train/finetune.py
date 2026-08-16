@@ -1,15 +1,15 @@
 """
 Downstream supervised fine-tuning
 
-One function drives every downstream task. The variant to run is expressed as a `RunSpec`, which is
-what makes the ablations cheap: the no-bbox control is the same code path with `use_bbox=False`, and
-the LayoutLM baseline is the same code path with a different backbone and tokenizer.
+One function drives every task, with the variant to run expressed as a RunSpec
+That is what makes a control the same code path rather than an approximation of it
 """
 
 from __future__ import annotations
 
 import json
 import logging
+from collections.abc import Sequence
 from dataclasses import asdict, dataclass, field, replace
 from pathlib import Path
 from typing import Any, cast
@@ -21,19 +21,25 @@ from transformers.trainer_utils import EvalPrediction
 
 from src.config import FinetuneConfig
 from src.data import DatasetMeta
-from src.eval.metrics import sequence_metrics, token_metrics
+from src.eval.fields import FIELD_LEVEL_SOURCES, score_fields
+from src.eval.metrics import (
+    decode_token_predictions,
+    sequence_metrics,
+    stitch_chunks,
+    token_metrics,
+)
 from src.model import (
     ModernLayoutLmConfig,
     ModernLayoutLmForSequenceClassification,
     ModernLayoutLmForTokenClassification,
     ModernLayoutLmProcessor,
 )
-from src.train.encoding import prepare_task_splits
+from src.train.encoding import SAMPLE_INDEX, load_split, prepare_task_splits
 from src.train.optimizer import build_param_groups, describe_param_groups
 
 logger = logging.getLogger(__name__)
 
-# Which split to score when a dataset has no dedicated validation split.
+# Which split to score when a dataset has no dedicated validation split
 FALLBACK_EVAL_SPLIT = "test"
 
 
@@ -142,18 +148,24 @@ def finetune(
     eval_split = "validation" if "validation" in splits else FALLBACK_EVAL_SPLIT
     output_dir = output_root / spec.run_name
 
+    scored = splits[eval_split]
+    chunk_pages = list(scored[SAMPLE_INDEX]) if SAMPLE_INDEX in scored.column_names else None
+    # Drop it before the Trainer sees it, since a stray column becomes a forward argument
+    scored = scored.remove_columns([SAMPLE_INDEX]) if chunk_pages is not None else scored
+    words = _eval_words(processed_dir, spec.task, eval_split, meta)
+
     trainer = Trainer(
         model=model,
         args=_training_args(config, output_dir, seed),
         train_dataset=splits["train"],
-        eval_dataset=splits[eval_split],
-        compute_metrics=_metric_fn(meta),
+        eval_dataset=scored,
+        compute_metrics=_metric_fn(meta, chunk_pages, words),
         optimizers=(_adamw(groups), None),
     )
     trainer.train()
-    metrics = trainer.evaluate(cast(Any, splits[eval_split]))
-    # Intermediate checkpoints are off, so the final weights are saved explicitly. The processor
-    # goes with them, because a model whose box convention has to be guessed is not reusable.
+    metrics = trainer.evaluate(cast(Any, scored))
+    # Save explicitly as intermediate checkpoints are off
+    # Ship the processor too or the box convention is a guess
     trainer.save_model(str(output_dir))
     processor.save_pretrained(str(output_dir))
 
@@ -169,8 +181,7 @@ def finetune(
     return result
 
 
-# The original LayoutLM has learned absolute position embeddings capped at 512. ModernLayoutLM
-# uses RoPE and has no such limit, which is one of the things the comparison is measuring.
+# Clamp for LayoutLM as its learned absolute positions cap at 512
 LAYOUTLM_MAX_LENGTH = 512
 
 
@@ -282,10 +293,7 @@ def _build_model(spec: RunSpec, meta: DatasetMeta) -> Any:
     model_config = ModernLayoutLmConfig.from_pretrained(
         spec.backbone,
         **label_kwargs,
-        # ModernBERT enables its own torch.compile path on CUDA by default, which makes triton
-        # shell out to /sbin/ldconfig. That does not exist on NixOS. Disabled here rather than in
-        # the config class, because it is a property of this machine and not of the architecture.
-        reference_compile=False,
+        reference_compile=False,  # triton shells out to /sbin/ldconfig, absent on NixOS
     )
     head = (
         ModernLayoutLmForTokenClassification
@@ -345,8 +353,7 @@ def _training_args(config: FinetuneConfig, output_dir: Path, seed: int) -> Train
         save_strategy="no",
         seed=seed,
         report_to=[],
-        # bbox must survive column pruning. The heads name it explicitly so Trainer keeps it, and
-        # this assertion is what would catch a regression in that.
+        # Assert bbox survives Trainer's column pruning
         remove_unused_columns=True,
     )
 
@@ -363,17 +370,47 @@ def _adamw(groups: list[dict[str, Any]]) -> Any:
     """
     from torch.optim import AdamW
 
-    # `name` is ours, for logging, and torch rejects unknown keys.
+    # `name` is ours, for logging, and torch rejects unknown keys
     clean = [{k: v for k, v in group.items() if k != "name"} for group in groups]
     return AdamW(clean)
 
 
-def _metric_fn(meta: DatasetMeta) -> Any:
+def _eval_words(
+    processed_dir: Path,
+    name: str,
+    split: str,
+    meta: DatasetMeta,
+) -> list[list[str]] | None:
+    """
+    Reads the evaluation split's words back, which field-level scoring needs and nothing else does
+
+    Args:
+        processed_dir: Root of the processed tree.
+        name: The dataset name.
+        split: The split being scored.
+        meta: The dataset metadata.
+
+    Returns:
+        One word list per page, or nothing when this dataset is not scored on fields.
+    """
+    if meta.source not in FIELD_LEVEL_SOURCES:
+        return None
+    return [list(page) for page in load_split(processed_dir, name, split)["words"]]
+
+
+def _metric_fn(
+    meta: DatasetMeta,
+    groups: Sequence[int] | None = None,
+    words: Sequence[Sequence[str]] | None = None,
+) -> Any:
     """
     Builds the compute_metrics callback for a dataset's task
 
     Args:
         meta: The dataset metadata, supplying the task and label names.
+        groups: The source page of each evaluation row, which stitches chunked pages before
+            scoring. The Trainer evaluates in dataset order, so position lines up with the split.
+        words: The evaluation split's words per page, needed only by a field-level dataset.
 
     Returns:
         A callable suitable for `Trainer(compute_metrics=...)`.
@@ -385,9 +422,16 @@ def _metric_fn(meta: DatasetMeta) -> Any:
         if isinstance(logits, tuple):
             logits = logits[0]
         labels = np.asarray(prediction.label_ids)
-        if meta.task == "token":
-            return token_metrics(np.asarray(logits), labels, meta.label_names)
-        return sequence_metrics(np.asarray(logits), labels)
+        if meta.task != "token":
+            return sequence_metrics(np.asarray(logits), labels)
+
+        scores = token_metrics(np.asarray(logits), labels, meta.label_names, groups)
+        if groups is None or words is None or meta.source not in FIELD_LEVEL_SOURCES:
+            return scores
+
+        predicted, truth = decode_token_predictions(np.asarray(logits), labels, meta.label_names)
+        predicted, truth = stitch_chunks(predicted, truth, groups)
+        return scores | score_fields(words, predicted, truth)
 
     return compute
 
