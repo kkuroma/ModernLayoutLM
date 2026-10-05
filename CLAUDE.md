@@ -24,6 +24,9 @@ The deliverable is a directory that `from_pretrained(..., trust_remote_code=True
   `models/` is local disk and holds only the upstream backbones.
   `packed/` is local disk and holds the tokenized pretraining packs, because training reads them in random order and the HDD cannot keep the GPU fed.
   All three gitignored, along with `scratchpad/`.
+- flash-attn is not a dependency.
+  The 2.8.3 wheel built for this torch sits in the gitignored `wheelhouse/`, and `uv run --with ./wheelhouse/flash_attn-2.8.3.post1-cp314-cp314-linux_x86_64.whl` brings FA2 into a single command.
+  The user asked that it never be recompiled.
 
 ### Three environment traps
 
@@ -56,6 +59,8 @@ src/model/   the graft, the encoder, three heads, the processor
 src/eval.py  scoring, pure functions of predictions and labels
 src/train/   batching, param groups, the two training stages
 scripts/     runnable entrypoints, one per job
+notes.md     every fact the project established, newest first
+performance.png, resource-usage.png   the two README figures
 ```
 
 `import-linter` enforces the layer order `src.train` > `src.eval` > `src.model` > `src.data`.
@@ -103,8 +108,12 @@ uv run python scripts/pretrain.py                                    # 512 phase
 uv run python scripts/finetune.py --dataset funsd --seed 42 43 44
 uv run python scripts/evaluate.py
 uv run python scripts/export.py --checkpoint data/checkpoints/fp32
-uv run python scripts/export.py --push owner/name --dry-run
+uv run python scripts/finetune.py --dataset realkie-fcc realkie-nda realkie-charities --seed 42
+uv run python scripts/export.py --push kkuroma/ModernLayoutLM --dry-run
 ```
+
+The shipped weights are the 512 phase alone.
+The 2048 phase produced `data/checkpoints/fp32-2048`, which scored 0.8427 mean RealKIE F1 against 0.8464 for `fp32` at seed 42, so it is not shipped.
 
 The shipped run did 52 sequences per second at length 512, over 1.91M packed sequences in 10.1 hours.
 Compile, flex attention, masked-only MLM scoring, fused AdamW and micro-batch 32 now reach 104, and `notes.md` shows they train the same model.
@@ -113,9 +122,11 @@ Probe before committing to a long run, and monitor it every 30 minutes per the m
 
 ## Status
 
-Model, data, training, scoring and export are in and tested.
-The table covers FUNSD, CORD and SROIE on the 11M-page weights, and `README.md` carries it.
+Finished on 2026-10-05 and public at `kkuroma/ModernLayoutLM`.
+The table covers FUNSD, CORD and SROIE at three seeds and RealKIE FCC, NDA and Charities at seed 42 and 10 epochs, all on the 11M-page weights, and `README.md` carries it.
 ModernLayoutLM trails LayoutLM v1 by 0.022 on FUNSD and 0.014 on CORD, and leads by 0.011 Hmean on SROIE inside seed noise.
+On RealKIE it leads LayoutLM v1 by 0.015 on FCC and 0.005 on NDA and trails by 0.003 on Charities, at one seed.
+With FA2 it runs a document of 1024 to 4096 tokens within 13% of LayoutLM v1's time over 512-token windows, and with half its memory at 8192 tokens.
 Kleister-Charity was dropped on 2026-10-05 for RealKIE, as its spans were string-matched and its pages stacked onto one grid.
 FUNSD fine-tuning is not deterministic at a fixed seed on this GPU: two runs of seed 43 gave 0.7745 and 0.7581.
 
@@ -124,20 +135,36 @@ Fine-tuning must start from `data/checkpoints/fp32`; the earlier `pretrain-base`
 Only runs named `task-variant-sSEED` reach the table, which is how an exploratory run sits beside the matrix without being averaged into it.
 And LayoutLM v1 runs at `baseline_learning_rate`, which `finetune` swaps in for any LayoutLM backbone, so `--set learning_rate` never reaches it.
 
-`data/checkpoints` was pruned of weights on 2026-08-19.
-The `fp32` root and four fine-tuned examples keep their tensors; every other run keeps its `config.json` and its `result.json` or `pretrain_result.json` and nothing else, so no deleted run can be re-scored without retraining it.
-`data/checkpoints/CLEANUP-2026-08-19.md` lists what went.
+`data/checkpoints` was pruned of weights on 2026-08-19, and `data/checkpoints/CLEANUP-2026-08-19.md` lists what went.
+A run pruned then keeps only its `config.json` and its `result.json` or `pretrain_result.json`, so it cannot be re-scored without retraining.
+Runs since keep their weights: 45 of the 63 fine-tuned runs, 26G in `finetune/`, plus `fp32` and `fp32-2048` at 6.7G each.
+
+### Left open
+
+1) The RealKIE rows rest on one seed, so their gaps to LayoutLM v1 sit inside a seed noise nobody measured.
+2) A 5e-5 fine-tuning rate was never tried on the 11M-page weights.
+3) The sequence-classification head has no downstream evidence, as the RVL-CDIP data was deleted before the final runs.
+4) `scripts/evaluate.py` still writes to `notebooks/results`, which left the repo on 2026-10-05, and the README's Layout tree and Running it section still point there.
+5) `fp32-2048` stays on the vault although nothing uses it.
 
 ### Publishing
 
-The hub card is `README.md` up to its Reproducing section, so the README is the one place to edit it.
-`data/exports/ModernLayoutLM-base-mlm` carries the 11M-page `fp32` weights and goes to `kkuroma/ModernLayoutLM`, pushed with the `hf auth login` token.
+The hub card is `README.md` up to its Reproducing section with hub metadata on top, so the README is the one place to edit it.
+`scripts/export.py --checkpoint data/checkpoints/fp32` writes `data/exports/ModernLayoutLM-base-mlm` with `LICENSE` and both figures beside the card.
+`--push kkuroma/ModernLayoutLM` uploads it with the `hf auth login` token, an OAuth token that expires on 2026-11-04.
+The last push was on 2026-10-05, so any README or figure change needs a re-export and a push.
+The card cites no arXiv link, as the hub turns each one into a "Paper for" entry and listed ModernBERT's paper as this model's.
+The Forgejo remote is the user's to manage.
 Per-model validation sweeps were dropped, decided 2026-10-02, as the precision they buy sits below FUNSD's seed noise.
+
+The figure scripts live in the gitignored `scratchpad/`, so they exist only on this machine.
+`uv run python scratchpad/performance/main.py` redraws `performance.png` from the README table.
+`scratchpad/inference-speed/main.py`, run with the flash-attn wheel, times the three setups into `results.json`, and `figure.py` beside it draws `resource-usage.png`.
 
 ### The 11M-page checkpoint
 
 `data/checkpoints/fp32` has seen about 11M page passes since 2026-10-02.
 It continued the 2.19M-page run over 8.8M pages of `data/processed/idl-fresh`, from 21 IDL shards the first corpus never read, in 17.9 hours at 114 seq/s.
 `fp32/kept` holds the weights every 2M pages.
-On FUNSD it scores 0.7565 at 3e-4, up from 0.7153, and 1e-4 and 5e-4 did no better; 5e-5 has not been tried on these weights.
+On FUNSD it scores 0.7565 at 3e-4, up from 0.7153, and 1e-4 and 5e-4 did no better.
 LayoutLM's own paper puts its FUNSD F1 at 0.6957 after 2M pages and 0.7636 after 11M.
