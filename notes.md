@@ -4,31 +4,46 @@ This file contains facts and observations we made while building the project, so
 
 ## Contents
 
-1. [RealKIE fine-tuning performs better at 10 epochs than at 15](#realkie-fine-tuning-performs-better-at-10-epochs-than-at-15)
-2. [2048-token uptraining does not improve RealKIE fine-tuning](#2048-token-uptraining-does-not-improve-realkie-fine-tuning)
-3. [Zeroed boxes leave the layout checkpoint below plain ModernBERT on every benchmark](#zeroed-boxes-leave-the-layout-checkpoint-below-plain-modernbert-on-every-benchmark)
-4. [Pretraining only at 512 tokens erodes the use of context past 2048](#pretraining-only-at-512-tokens-erodes-the-use-of-context-past-2048)
-5. [600 steps at 2048 tokens restore the use of context up to 4096](#600-steps-at-2048-tokens-restore-the-use-of-context-up-to-4096)
-6. [Kleister-Charity's stacked page boxes break the pretrained model](#kleister-charitys-stacked-page-boxes-break-the-pretrained-model)
-7. [Kleister-Charity's spans are recovered by string matching, not annotated](#kleister-charitys-spans-are-recovered-by-string-matching-not-annotated)
-8. [11M pages lift FUNSD from 0.7153 to 0.7565 at the same rate](#11m-pages-lift-funsd-from-07153-to-07565-at-the-same-rate)
-9. [3e-4 stays the best FUNSD rate on the 11M-page checkpoint](#3e-4-stays-the-best-funsd-rate-on-the-11m-page-checkpoint)
-10. [Per-model rate sweeps move FUNSD less than its seed noise](#per-model-rate-sweeps-move-funsd-less-than-its-seed-noise)
-11. [FUNSD fine-tuning is not deterministic at a fixed seed on this GPU](#funsd-fine-tuning-is-not-deterministic-at-a-fixed-seed-on-this-gpu)
-12. [The fast pretraining stack doubles throughput to 104 seq/s](#the-fast-pretraining-stack-doubles-throughput-to-104-seqs)
-13. [The fast stack trains the same model as the old one](#the-fast-stack-trains-the-same-model-as-the-old-one)
-14. [Pretraining is power-bound at the 270W cap, so TF32 buys nothing](#pretraining-is-power-bound-at-the-270w-cap-so-tf32-buys-nothing)
-15. [Our entity F1 matches LayoutLM v1 and v3 scoring exactly](#our-entity-f1-matches-layoutlm-v1-and-v3-scoring-exactly)
-16. [SROIE's published metric is field-level Hmean, not entity F1](#sroies-published-metric-is-field-level-hmean-not-entity-f1)
-17. [SROIE's official keys disagree with its tags on a fifth of addresses](#sroies-official-keys-disagree-with-its-tags-on-a-fifth-of-addresses)
-18. [Scoring overflow chunks separately penalizes LayoutLM's 512 window](#scoring-overflow-chunks-separately-penalizes-layoutlms-512-window)
-19. [Plain ModernBERT beats LayoutLM without boxes on text alone](#plain-modernbert-beats-layoutlm-without-boxes-on-text-alone)
-20. [The nielsr/funsd-layoutlmv3 boxes leak every entity boundary](#the-nielsrfunsd-layoutlmv3-boxes-leak-every-entity-boundary)
-21. [Word-level FUNSD reproduces LayoutLM's paper score](#word-level-funsd-reproduces-layoutlms-paper-score)
-22. [ModernBERT fine-tunes best at 3e-4, not LayoutLM's 5e-5](#modernbert-fine-tunes-best-at-3e-4-not-layoutlms-5e-5)
-23. [The best fine-tuning rate differs by variant](#the-best-fine-tuning-rate-differs-by-variant)
-24. [bf16 master weights cost about 20 FUNSD F1 while pretraining loss looks fine](#bf16-master-weights-cost-about-20-funsd-f1-while-pretraining-loss-looks-fine)
-25. [flash-attn needs bf16 inputs, not bf16 weights](#flash-attn-needs-bf16-inputs-not-bf16-weights)
+1. [ModernLayoutLM with FA2 reads whole documents at the speed of chunked LayoutLMv1](#modernlayoutlm-with-fa2-reads-whole-documents-at-the-speed-of-chunked-layoutlmv1)
+2. [RealKIE fine-tuning performs better at 10 epochs than at 15](#realkie-fine-tuning-performs-better-at-10-epochs-than-at-15)
+3. [2048-token uptraining does not improve RealKIE fine-tuning](#2048-token-uptraining-does-not-improve-realkie-fine-tuning)
+4. [Zeroed boxes leave the layout checkpoint below plain ModernBERT on every benchmark](#zeroed-boxes-leave-the-layout-checkpoint-below-plain-modernbert-on-every-benchmark)
+5. [Pretraining only at 512 tokens erodes the use of context past 2048](#pretraining-only-at-512-tokens-erodes-the-use-of-context-past-2048)
+6. [600 steps at 2048 tokens restore the use of context up to 4096](#600-steps-at-2048-tokens-restore-the-use-of-context-up-to-4096)
+7. [Kleister-Charity's stacked page boxes break the pretrained model](#kleister-charitys-stacked-page-boxes-break-the-pretrained-model)
+8. [Kleister-Charity's spans are recovered by string matching, not annotated](#kleister-charitys-spans-are-recovered-by-string-matching-not-annotated)
+9. [11M pages lift FUNSD from 0.7153 to 0.7565 at the same rate](#11m-pages-lift-funsd-from-07153-to-07565-at-the-same-rate)
+10. [3e-4 stays the best FUNSD rate on the 11M-page checkpoint](#3e-4-stays-the-best-funsd-rate-on-the-11m-page-checkpoint)
+11. [Per-model rate sweeps move FUNSD less than its seed noise](#per-model-rate-sweeps-move-funsd-less-than-its-seed-noise)
+12. [FUNSD fine-tuning is not deterministic at a fixed seed on this GPU](#funsd-fine-tuning-is-not-deterministic-at-a-fixed-seed-on-this-gpu)
+13. [The fast pretraining stack doubles throughput to 104 seq/s](#the-fast-pretraining-stack-doubles-throughput-to-104-seqs)
+14. [The fast stack trains the same model as the old one](#the-fast-stack-trains-the-same-model-as-the-old-one)
+15. [Pretraining is power-bound at the 270W cap, so TF32 buys nothing](#pretraining-is-power-bound-at-the-270w-cap-so-tf32-buys-nothing)
+16. [Our entity F1 matches LayoutLM v1 and v3 scoring exactly](#our-entity-f1-matches-layoutlm-v1-and-v3-scoring-exactly)
+17. [SROIE's published metric is field-level Hmean, not entity F1](#sroies-published-metric-is-field-level-hmean-not-entity-f1)
+18. [SROIE's official keys disagree with its tags on a fifth of addresses](#sroies-official-keys-disagree-with-its-tags-on-a-fifth-of-addresses)
+19. [Scoring overflow chunks separately penalizes LayoutLM's 512 window](#scoring-overflow-chunks-separately-penalizes-layoutlms-512-window)
+20. [Plain ModernBERT beats LayoutLM without boxes on text alone](#plain-modernbert-beats-layoutlm-without-boxes-on-text-alone)
+21. [The nielsr/funsd-layoutlmv3 boxes leak every entity boundary](#the-nielsrfunsd-layoutlmv3-boxes-leak-every-entity-boundary)
+22. [Word-level FUNSD reproduces LayoutLM's paper score](#word-level-funsd-reproduces-layoutlms-paper-score)
+23. [ModernBERT fine-tunes best at 3e-4, not LayoutLM's 5e-5](#modernbert-fine-tunes-best-at-3e-4-not-layoutlms-5e-5)
+24. [The best fine-tuning rate differs by variant](#the-best-fine-tuning-rate-differs-by-variant)
+25. [bf16 master weights cost about 20 FUNSD F1 while pretraining loss looks fine](#bf16-master-weights-cost-about-20-funsd-f1-while-pretraining-loss-looks-fine)
+26. [flash-attn needs bf16 inputs, not bf16 weights](#flash-attn-needs-bf16-inputs-not-bf16-weights)
+
+## ModernLayoutLM with FA2 reads whole documents at the speed of chunked LayoutLMv1
+
+- Summary: With FA2, ModernLayoutLM ran one document of 1024 to 4096 tokens within 13% of LayoutLMv1's time over 512-token windows, and needed half its memory at 8192 tokens.
+- Date: 2026-10-05
+- Evidence: we timed one document per forward pass in bf16 on the RTX 3090, LayoutLMv1 in windows overlapping by 128 with eager attention and ModernLayoutLM whole with SDPA and with FA2, as the median of three rounds of 30 passes, as follows:
+
+| tokens | LayoutLMv1 windows | LayoutLMv1 ms | SDPA ms | FA2 ms | LayoutLMv1 GiB | SDPA GiB | FA2 GiB |
+|---|---|---|---|---|---|---|---|
+| 512 | 1 | 5.8 | 7.4 | 7.4 | 0.24 | 0.30 | 0.30 |
+| 1024 | 3 | 14.3 | 13.9 | 12.5 | 0.31 | 0.31 | 0.31 |
+| 2048 | 6 | 27.3 | 30.7 | 24.8 | 0.41 | 0.35 | 0.33 |
+| 4096 | 11 | 48.6 | 76.9 | 52.2 | 0.57 | 0.54 | 0.37 |
+| 8192 | 22 | 95.1 | 215.7 | 113.8 | 0.94 | 1.30 | 0.46 |
 
 ## RealKIE fine-tuning performs better at 10 epochs than at 15
 

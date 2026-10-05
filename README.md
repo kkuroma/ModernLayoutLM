@@ -24,6 +24,7 @@ model(**batch)
 - Every subword of a word takes the word's box, which the bundled processor handles.
 - `padding` defaults to `max_length`, which without an explicit length is the model's own 8192.
 - `bbox=None` skips the layout sum and the model runs as plain ModernBERT, while all-zero boxes put every word at the origin.
+- Attention defaults to SDPA; `attn_implementation="flash_attention_2"` with `flash-attn` installed is faster and lighter on long documents, see Inference cost.
 
 ## Training data
 
@@ -125,11 +126,31 @@ Each column is one model fine-tuned on identical data.
 
 ModernLayoutLM performs comparably to LayoutLMv1, but natively supports long context.
 
+### Inference cost
+
+![Latency and peak GPU memory per document for ModernLayoutLM with FA2 and SDPA, and LayoutLMv1 in 512-token windows](resource-usage.png)
+
+| setting | value |
+|---|---|
+| input | one document per forward pass, bf16, 23-label token head |
+| hardware | RTX 3090 capped at 270W |
+| timing | median of three rounds of 30 passes, the model order alternating between rounds |
+| memory | peak allocated, weights included |
+| LayoutLMv1 | 512-token windows overlapping by 128, run as one batch with eager attention, its only option in transformers |
+
+| tokens | LayoutLMv1 windows | LayoutLMv1 ms | ModernLayoutLM SDPA ms | ModernLayoutLM FA2 ms | LayoutLMv1 GiB | ModernLayoutLM SDPA GiB | ModernLayoutLM FA2 GiB |
+|---|---|---|---|---|---|---|---|
+| 512 | 1 | 5.8 | 7.4 | 7.4 | 0.24 | 0.30 | 0.30 |
+| 1024 | 3 | 14.3 | 13.9 | 12.5 | 0.31 | 0.31 | 0.31 |
+| 2048 | 6 | 27.3 | 30.7 | 24.8 | 0.41 | 0.35 | 0.33 |
+| 4096 | 11 | 48.6 | 76.9 | 52.2 | 0.57 | 0.54 | 0.37 |
+| 8192 | 22 | 95.1 | 215.7 | 113.8 | 0.94 | 1.30 | 0.46 |
+
 ## Citation
 
 Xu, Y., Li, M., Cui, L., Huang, S., Wei, F., & Zhou, M. (2020). LayoutLM: Pre-training of Text and Layout for Document Image Understanding. In *Proceedings of the 26th ACM SIGKDD International Conference on Knowledge Discovery & Data Mining* (pp. 1192-1200). https://doi.org/10.1145/3394486.3403172
 
-Warner, B., Chaffin, A., Clavié, B., Weller, O., Hallström, O., Taghadouini, S., Gallagher, A., Biswas, R., Ladhak, F., Aarsen, T., Cooper, N., Adams, G., Howard, J., & Poli, I. (2024). Smarter, Better, Faster, Longer: A Modern Bidirectional Encoder for Fast, Memory Efficient, and Long Context Finetuning and Inference. *arXiv preprint arXiv:2412.13663*. https://arxiv.org/abs/2412.13663
+Warner, B., Chaffin, A., Clavié, B., Weller, O., Hallström, O., Taghadouini, S., Gallagher, A., Biswas, R., Ladhak, F., Aarsen, T., Cooper, N., Adams, G., Howard, J., & Poli, I. (2024). Smarter, Better, Faster, Longer: A Modern Bidirectional Encoder for Fast, Memory Efficient, and Long Context Finetuning and Inference. Preprint.
 
 ```bibtex
 @inproceedings{xu2020layoutlm,
@@ -145,11 +166,7 @@ Warner, B., Chaffin, A., Clavié, B., Weller, O., Hallström, O., Taghadouini, S
 @misc{warner2024smarterbetterfasterlonger,
   title={Smarter, Better, Faster, Longer: A Modern Bidirectional Encoder for Fast, Memory Efficient, and Long Context Finetuning and Inference},
   author={Benjamin Warner and Antoine Chaffin and Benjamin Clavi{\'e} and Orion Weller and Oskar Hallstr{\"o}m and Said Taghadouini and Alexis Gallagher and Raja Biswas and Faisal Ladhak and Tom Aarsen and Nathan Cooper and Griffin Adams and Jeremy Howard and Iacopo Poli},
-  year={2024},
-  eprint={2412.13663},
-  archivePrefix={arXiv},
-  primaryClass={cs.CL},
-  url={https://arxiv.org/abs/2412.13663}
+  year={2024}
 }
 ```
 
@@ -176,6 +193,7 @@ notebooks/      results/ holds the tables scripts/evaluate.py writes
 config.toml     every path and hyperparameter
 notes.md        facts found along the way, newest first
 performance.png the figure at the top of this README
+resource-usage.png the figure under Inference cost
 ```
 
 See `src/README.md` and `scripts/README.md` for the module trees.

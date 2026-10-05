@@ -114,7 +114,7 @@ def main() -> int:
     payload["auto_map"] = {**AUTO_MAP, **payload.get("auto_map", {})}
     config_path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n")
     _write_card(export_dir, pipeline)
-    for name in ("LICENSE", "performance.png"):
+    for name in ("LICENSE", "performance.png", "resource-usage.png"):
         shutil.copy(ROOT / name, export_dir / name)
 
     missing = [f for f in REQUIRED_FILES if not (export_dir / f).is_file()]
