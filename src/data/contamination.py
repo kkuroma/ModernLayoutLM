@@ -108,8 +108,8 @@ class Fingerprints:
         """
         Loads the fingerprint set, returning an empty one when absent
 
-        An absent file is not an error: it means no benchmark overlaps this corpus, which is the
-        case for CORD and SROIE. Callers that require filtering should check `len`.
+        An absent file means no benchmark overlaps this corpus, as for CORD and SROIE.
+        Callers that require filtering should check `len`.
 
         Args:
             directory: Where `FINGERPRINT_FILE` lives.

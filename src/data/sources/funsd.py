@@ -12,8 +12,7 @@ from typing import Any, cast
 
 from datasets import Dataset, load_dataset
 
-from ..normalize import COORDINATE_SCALE, clamp_box
-from ..schema import DatasetMeta, Document
+from ..schema import COORDINATE_SCALE, DatasetMeta, Document, clamp_box
 
 REPO = "nielsr/funsd"
 SPLITS = {"train": "train", "test": "test"}
@@ -78,8 +77,8 @@ def _assert_normalized(boxes: list[list[int]], doc_id: str, width: int, height: 
     """
     Confirms the source's boxes really are on the 0-1000 scale and not in pixels
 
-    The two are easy to confuse, because FUNSD pages happen to be about 1000 pixels tall. A box
-    that exceeds the scale is the giveaway, and a silent misread here would shift every coordinate.
+    The two are easy to confuse, as FUNSD pages happen to be about 1000 pixels tall.
+    A box beyond the scale is the giveaway, and a silent misread would shift every coordinate.
 
     Args:
         boxes: The source boxes for one page.

@@ -1,55 +1,52 @@
-# Results
+# Downstream results
 
-## cord
+## Variants
 
-| variant | f1 | precision | recall | token_accuracy | loss | what it is |
-|---|---|---|---|---|---|---|
-| layout | 0.9418 | 0.9346 | 0.9491 | 0.9570 | 0.2405 | ModernLayoutLM: layout-MLM then fine-tune |
-| layoutlm | 0.9661 | 0.9625 | 0.9696 | 0.9721 | 0.2016 | microsoft/layoutlm-base-uncased, identical data |
-| skipmlm | 0.9362 | 0.9282 | 0.9442 | 0.9543 | 0.2622 | ours, fine-tuned straight off ModernBERT |
-| nobbox | 0.9290 | 0.9189 | 0.9393 | 0.9492 | 0.2422 | ours, boxes withheld at fine-tune time |
+| variant | backbone and boxes |
+|---|---|
+| layout | ModernLayoutLM: layout-MLM then fine-tune |
+| layoutlm | microsoft/layoutlm-base-uncased, identical data |
+| skipmlm | ours, fine-tuned straight off ModernBERT |
+| nobbox | ours, boxes withheld at fine-tune time |
+| plain | plain ModernBERT: no layout-MLM, no boxes |
 
-- plain ModernBERT: not run
-- does not beat layoutlm-base-uncased by -0.0243 f1
-- beats the same model without the layout-MLM stage by +0.0056 f1
+## cord, by variant
 
-## funsd
+| variant | f1 | precision | recall | token_accuracy | loss | seeds | train chunks |
+|---|---|---|---|---|---|---|---|
+| layout | 0.9546 ± 0.0023 | 0.9487 ± 0.0028 | 0.9606 ± 0.0025 | 0.9657 ± 0.0029 | 0.2264 ± 0.0192 | 3 | 800 |
+| layoutlm | 0.9685 ± 0.0037 | 0.9650 ± 0.0043 | 0.9721 ± 0.0033 | 0.9736 ± 0.0021 | 0.1885 ± 0.0106 | 3 | 800 |
+| skipmlm | 0.9462 ± 0.0050 | 0.9401 ± 0.0067 | 0.9524 ± 0.0046 | 0.9585 ± 0.0034 | 0.2661 ± 0.0332 | 3 | 800 |
+| nobbox | 0.9312 ± 0.0042 | 0.9229 ± 0.0058 | 0.9396 ± 0.0026 | 0.9517 ± 0.0007 | 0.2721 ± 0.0038 | 3 | 800 |
+| plain | 0.9424 ± 0.0006 | 0.9361 ± 0.0008 | 0.9489 ± 0.0005 | 0.9568 ± 0.0023 | 0.2827 ± 0.0210 | 3 | 800 |
 
-| variant | f1 | precision | recall | token_accuracy | loss | what it is |
-|---|---|---|---|---|---|---|
-| layout | 0.7610 | 0.7400 | 0.7833 | 0.6901 | 1.8226 | ModernLayoutLM: layout-MLM then fine-tune |
-| layoutlm | 0.8616 | 0.8504 | 0.8731 | 0.7907 | 1.1751 | microsoft/layoutlm-base-uncased, identical data |
-| skipmlm | 0.5138 | 0.4634 | 0.5766 | 0.6319 | 2.3650 | ours, fine-tuned straight off ModernBERT |
-| nobbox | 0.3121 | 0.2776 | 0.3564 | 0.5080 | 1.2590 | ours, boxes withheld at fine-tune time |
-| plain | 0.5084 | 0.4594 | 0.5691 | 0.6274 | 1.9006 | plain ModernBERT: no layout-MLM, no boxes |
+## funsd, by variant
 
-- beats plain ModernBERT by +0.2526 f1
-- does not beat layoutlm-base-uncased by -0.1006 f1
-- beats the same model without the layout-MLM stage by +0.2472 f1
+| variant | f1 | precision | recall | token_accuracy | loss | seeds | train chunks |
+|---|---|---|---|---|---|---|---|
+| layout | 0.7565 ± 0.0037 | 0.7258 ± 0.0071 | 0.7900 ± 0.0025 | 0.7732 ± 0.0077 | 1.9586 ± 0.1319 | 3 | 149 |
+| layoutlm | 0.7785 ± 0.0104 | 0.7546 ± 0.0098 | 0.8041 ± 0.0127 | 0.8005 ± 0.0022 | 1.1433 ± 0.0358 | 3 | 150 |
+| skipmlm | 0.5939 ± 0.0205 | 0.5594 ± 0.0308 | 0.6335 ± 0.0079 | 0.6748 ± 0.0146 | 2.4627 ± 0.1685 | 3 | 149 |
+| nobbox | 0.3000 ± 0.0247 | 0.3020 ± 0.0137 | 0.2986 ± 0.0351 | 0.5108 ± 0.0304 | 2.0203 ± 0.2420 | 3 | 149 |
+| plain | 0.5884 ± 0.0082 | 0.5538 ± 0.0075 | 0.6278 ± 0.0149 | 0.6705 ± 0.0058 | 2.4702 ± 0.1783 | 3 | 149 |
 
-## rvlcdip
+## kleister, by variant
 
-| variant | accuracy | macro_f1 | loss | what it is |
-|---|---|---|---|---|
-| layout | 0.8582 | 0.8537 | 0.5319 | ModernLayoutLM: layout-MLM then fine-tune |
-| layoutlm | 0.8852 | 0.8750 | 0.4452 | microsoft/layoutlm-base-uncased, identical data |
-| skipmlm | 0.8315 | 0.8252 | 0.6390 | ours, fine-tuned straight off ModernBERT |
-| nobbox | 0.7454 | 0.7377 | 0.8151 | ours, boxes withheld at fine-tune time |
+| variant | f1 | precision | recall | token_accuracy | loss | seeds | train chunks |
+|---|---|---|---|---|---|---|---|
+| layout | 0.7925 | 0.8199 | 0.7669 | 0.9938 | 0.0286 | 1 | 3631 |
+| layoutlm | 0.7746 | 0.8268 | 0.7287 | 0.9919 | 0.0788 | 1 | 25956 |
+| skipmlm | 0.7917 | 0.8440 | 0.7455 | 0.9936 | 0.0352 | 1 | 3631 |
+| nobbox | 0.7061 | 0.7608 | 0.6588 | 0.9907 | 0.0501 | 1 | 3631 |
+| plain | 0.7964 | 0.8368 | 0.7597 | 0.9937 | 0.0358 | 1 | 3631 |
 
-- plain ModernBERT: not run
-- does not beat layoutlm-base-uncased by -0.0270 accuracy
-- beats the same model without the layout-MLM stage by +0.0267 accuracy
+## sroie, by variant
 
-## sroie
-
-| variant | f1 | precision | recall | token_accuracy | loss | what it is |
-|---|---|---|---|---|---|---|
-| layout | 0.8372 | 0.8710 | 0.8060 | 0.9867 | 0.1055 | ModernLayoutLM: layout-MLM then fine-tune |
-| layoutlm | 0.8222 | 0.8162 | 0.8284 | 0.9865 | 0.0957 | microsoft/layoutlm-base-uncased, identical data |
-| skipmlm | 0.7923 | 0.8175 | 0.7687 | 0.9867 | 0.1063 | ours, fine-tuned straight off ModernBERT |
-| nobbox | 0.7954 | 0.8240 | 0.7687 | 0.9859 | 0.0868 | ours, boxes withheld at fine-tune time |
-
-- plain ModernBERT: not run
-- beats layoutlm-base-uncased by +0.0150 f1
-- beats the same model without the layout-MLM stage by +0.0449 f1
+| variant | f1 | precision | recall | hmean | field_precision | field_recall | token_accuracy | loss | seeds | train chunks |
+|---|---|---|---|---|---|---|---|---|---|---|
+| layout | 0.8551 ± 0.0207 | 0.8674 ± 0.0292 | 0.8433 ± 0.0129 | 0.9337 ± 0.0060 | 0.9437 ± 0.0078 | 0.9239 ± 0.0045 | 0.9887 ± 0.0014 | 0.0893 ± 0.0052 | 3 | 594 |
+| layoutlm | 0.8442 ± 0.0083 | 0.8405 ± 0.0236 | 0.8483 ± 0.0086 | 0.9223 ± 0.0199 | 0.9259 ± 0.0200 | 0.9186 ± 0.0198 | 0.9880 ± 0.0017 | 0.0802 ± 0.0082 | 3 | 597 |
+| skipmlm | 0.7965 ± 0.0083 | 0.8048 ± 0.0156 | 0.7886 ± 0.0043 | 0.8883 ± 0.0121 | 0.9004 ± 0.0154 | 0.8766 ± 0.0164 | 0.9843 ± 0.0012 | 0.1284 ± 0.0164 | 3 | 594 |
+| nobbox | 0.7516 ± 0.0088 | 0.7544 ± 0.0095 | 0.7488 ± 0.0114 | 0.8411 ± 0.0189 | 0.8707 ± 0.0136 | 0.8136 ± 0.0253 | 0.9824 ± 0.0018 | 0.1341 ± 0.0114 | 3 | 594 |
+| plain | 0.8097 ± 0.0085 | 0.8215 ± 0.0232 | 0.7985 ± 0.0075 | 0.8955 ± 0.0072 | 0.9153 ± 0.0157 | 0.8766 ± 0.0045 | 0.9857 ± 0.0007 | 0.1084 ± 0.0040 | 3 | 594 |
 

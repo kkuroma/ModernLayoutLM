@@ -15,8 +15,7 @@ from typing import Any
 
 from huggingface_hub import hf_hub_download
 
-from ..normalize import normalize_box
-from ..schema import DatasetMeta, Document
+from ..schema import DatasetMeta, Document, normalize_box
 
 REPO = "bsmock/pubtables-1m"
 WORDS_ARCHIVE = "PubTables-1M-Detection_Page_Words.tar.gz"
@@ -28,7 +27,7 @@ SPLITS = {
     "test": "test_filelist.txt",
 }
 
-# A page with almost no extractable text is not worth a training sequence
+# A page with almost no extractable text earns no training sequence
 MIN_WORDS = 8
 
 
@@ -56,8 +55,8 @@ def load(split: str, cache_dir: str | None = None) -> Iterator[Document]:
     """
     Yields PubTables-1M pages in the canonical schema
 
-    The words archive is streamed once from front to back and each page is matched against the
-    split's file list, because a 6.5GB gzip stream cannot be seeked into cheaply.
+    The words archive is streamed once, matching each page against the split's file list.
+    A 6.5GB gzip stream cannot be seeked into cheaply.
 
     Args:
         split: One of the keys of `SPLITS`.

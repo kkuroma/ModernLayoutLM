@@ -1,46 +1,52 @@
-# Where things live, `data` symlinks to the vault and `models` is local disk
+# Where things live, `data` symlinks to the vault, `models` and `packed` are local disk
 [Paths]
 raw_dir = "data/raw"                       # datasets exactly as downloaded
 processed_dir = "data/processed"           # canonical parquet, our schema
+pack_dir = "packed"                        # tokenized pretraining packs, local as random HDD reads starve the GPU
 checkpoint_dir = "data/checkpoints"        # training checkpoints
 backbone_dir = "models/backbones"          # pulled upstream weights
-export_dir = "models/exports"              # final HF-format models
+export_dir = "data/exports"                # final HF-format models, on the vault
 report_dir = "notebooks/results"           # evaluation tables
 
-# The graft: LayoutLM's four 2D tables added onto a ModernBERT embedding
-# 1. Boxes normalized to a 0-1000 grid, one table each for x, y, width, height
-# 2. Tables start at zero so a fresh graft matches its backbone exactly
-[Model]
-backbone = "answerdotai/ModernBERT-base"
-max_2d_position_embeddings = 1024          # coordinates normalized to 0-1000
-coordinate_scale = 1000
-zero_init_2d = true                        # a fresh graft is identical to its backbone
-
-# Stage 1: layout-aware masked language modelling
+# Stage 1: layout-aware masked language modelling, in two phases
 # 1. Mask the text, leave the boxes, so recovering a token rewards reading its position
-# 2. Pages are packed into full sequences rather than padded one per window
+# 2. Rows are packed into full windows, and a row longer than one spans several
 # 3. Backbone and the fresh 2D tables train at separate rates
-# 4. One pass over the whole corpus, capped per source so no one corpus dominates
+# 4. Short windows of single pages first, then long windows of whole documents
 [Pretrain]
-datasets = ["idl", "pubtables", "pdfa", "doclaynet"]
-max_length = 512                           # more real tokens per second than 1024, and RoPE extrapolates past it
+datasets = ["idl", "pubtables", "pdfa", "doclaynet", "idl-fresh"]
+max_length = 512                           # single pages, the cheapest tokens per second
+steps = 144908                             # the shipped weights ran 29899 on the first four corpora, then 115009 on idl-fresh
 mlm_probability = 0.3                      # ModernBERT's recipe, not BERT's 0.15
 learning_rate = 5e-5                       # pretrained backbone
 layout_learning_rate = 1e-3                # fresh 2D tables, they start from zero
 weight_decay = 0.01
 warmup_ratio = 0.05
-epochs = 1                                 # one pass over everything beats several over a fraction
-max_pages_per_source = 1500000             # ~2.19M pages, ~31k steps
-batch_size = 16                            # 13.2GB peak; 24 costs 18.7GB and buys 5%
-grad_accum = 4
-save_total_limit = 0                       # 0 keeps every checkpoint
+max_pages_per_source = 8800000             # idl-fresh's share of the 11M pages
+batch_size = 32                            # fits only as the MLM head scores masked tokens alone
+grad_accum = 2
+save_total_limit = 2                       # 0 keeps every checkpoint, at 1.9GB each
+keep_every = 0                             # also keep the weights of every Nth step, 0 keeps none
+pack_rows = 2000                           # rows per packing call, each held in memory by one process
+pack_workers = 12
+
+# Phase 2 continues phase 1 and inherits every key it does not set
+[Pretrain.long]
+datasets = ["idl-docs"]
+max_length = 2048                          # whole documents, as 512 alone lost the use of context past 2048
+steps = 28000                              # 917M tokens, about 6 hours at 45k tokens per second
+batch_size = 8                             # the same 32k tokens per step as phase 1
+keep_every = 6000
+pack_rows = 330                            # a row is a whole document of about 6 pages, so 2000 overran 61GB of RAM
+pack_workers = 6
 
 # Stage 2: downstream supervised fine-tuning
-# 1. Token classification for FUNSD, CORD and SROIE, sequence classification for RVL-CDIP
+# 1. Token classification for FUNSD, CORD, SROIE and RealKIE
 # 2. Per-task overrides below, since the corpora differ by three orders of magnitude
 [Finetune]
 max_length = 1024
-learning_rate = 3e-4                       # swept on FUNSD, +0.053 F1 over LayoutLM's 5e-5
+learning_rate = 3e-4                       # ours and the ModernBERT controls, 1e-4 and 5e-4 no better on FUNSD at 11M pages
+baseline_learning_rate = 5e-5              # LayoutLM v1 at its paper's rate
 layout_learning_rate = 1e-4
 weight_decay = 0.01
 warmup_ratio = 0.1
@@ -48,7 +54,6 @@ epochs = 20
 batch_size = 8
 grad_accum = 2
 label_all_subwords = false                 # label the first subword, -100 on the rest
-max_train_pages = 0                        # 0 uses everything
 
 # Small corpora, a few hundred pages each, so they need many more passes
 [Finetune.funsd]
@@ -59,3 +64,22 @@ epochs = 30
 
 [Finetune.sroie]
 epochs = 30
+
+# RealKIE, multi-page documents, so a long window and one document per step
+[Finetune.realkie-fcc]
+epochs = 10
+max_length = 4096
+batch_size = 1
+grad_accum = 8
+
+[Finetune.realkie-nda]
+epochs = 10
+max_length = 4096
+batch_size = 1
+grad_accum = 8
+
+[Finetune.realkie-charities]
+epochs = 10
+max_length = 4096
+batch_size = 1
+grad_accum = 8

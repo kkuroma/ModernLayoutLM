@@ -1,59 +1,29 @@
 # train
 
-The top layer. Tokenizes canonical parquet into model inputs, then runs the two training stages.
-
-## Files
+The top layer: canonical parquet to model batches, then the two training stages.
 
 ```
-encoding.py   canonical parquet to chunked model inputs
-collator.py   the MVLM collator, which keeps the boxes
-optimizer.py  parameter groups: layout tables apart from the backbone
-pretrain.py   stage 1, layout-aware masked language modeling
-finetune.py   stage 2, downstream supervised fine-tuning and the ablations
+batches.py    tokenize and chunk, pack pages for pretraining, and the MLM collator
+pretrain.py   stage 1, one phase of layout-aware MLM, its parameter groups and checkpoint keeping
+finetune.py   stage 2, downstream fine-tuning for every variant and the LayoutLM baseline
 ```
 
-`encoding.py` lives here rather than in `src/data` because applying the processor needs both the
-data stage and the model stage, and `src.train` is the only layer allowed to import both.
+Batching lives here rather than in `src/data` because applying the processor needs both the data and the model stage, and `src.train` is the only layer allowed to import both.
 
-## Two things that exist only to stop the boxes disappearing
+Two things exist only to stop the boxes disappearing.
+`LayoutMlmCollator` replaces `DataCollatorForLanguageModeling`, which drops every column it does not recognize, `bbox` among them.
+And every head names `bbox` in its forward, because `Trainer._remove_unused_columns` prunes by signature.
+Either failure trains a layout model on no layout while the loss falls normally.
 
-**`LayoutMlmCollator`.** `DataCollatorForLanguageModeling` builds its batch from `input_ids` and
-drops every column it does not recognize, `bbox` among them. Wrapping it would not help, so it is
-replaced. A run using the stock collator would train a layout model on no layout while reporting a
-perfectly healthy falling loss.
+The four layout tables start at zero, the backbone has seen two trillion tokens, so `param_groups` gives them separate rates and exempts the tables from weight decay.
+It raises on a model without `LayoutEmbedding` tables, the cheapest catch for a run configured against plain ModernBERT.
 
-**`bbox` named explicitly in every head's forward.** `Trainer._remove_unused_columns` inspects the
-signature to decide which dataset columns to keep. The same silent failure, reached by a different
-route. `tests/model/test_modeling.py` asserts the signature, and the collator raises if a feature
-reaches it without boxes.
+Pretraining runs in two phases, 512-token windows of single pages and then 2048-token windows of whole documents, each for its own step count.
+A packed row longer than the window becomes consecutive windows kept together and in order, rather than losing its tail.
+Pretraining keeps fp32 master weights under bf16 autocast, compiles the model, scores only masked tokens and uses fused AdamW.
+`KeepCheckpoints` copies the weights of every `keep_every`th step aside, so a long run leaves a transfer curve behind after its rolling checkpoints rotate out.
 
-## Parameter groups
+A page longer than the window becomes overlapping chunks.
+Token tasks keep their own label slice per chunk, and scoring stitches the chunks of a page back together before it counts entities.
 
-The four layout tables start at zero and have never seen a gradient. The backbone has seen two
-trillion tokens. One learning rate cannot serve both, so `build_param_groups` splits them, and the
-layout group is exempted from weight decay because decay would pull the tables back toward the zero
-they started at.
-
-`build_param_groups` raises on a model with no `LayoutEmbedding` tables. That is deliberate: it is
-the cheapest way to catch a run accidentally configured against a plain ModernBERT.
-
-## Chunking
-
-A page longer than the sequence limit becomes several overlapping chunks rather than being
-truncated. Token tasks keep their own slice of the labels per chunk; sequence tasks give every
-chunk the page's label, so a long document contributes several examples and is scored per chunk.
-
-## Running
-
-```sh
-# measure throughput before committing a night to it
-uv run python scripts/train/pretrain.py --max-pages 2000 --max-steps 50
-uv run python scripts/train/pretrain.py
-
-uv run python scripts/train/finetune.py --dataset funsd
-uv run python scripts/train/finetune.py --dataset funsd --no-bbox   # the no-bbox control
-```
-
-On NixOS both need `TRITON_LIBCUDA_PATH` and `TRITON_PTXAS_PATH`, which the flake sets. torch 2.13
-routes ModernBERT's RoPE through a triton kernel, and triton otherwise shells out to
-`/sbin/ldconfig` and ships a `ptxas` NixOS cannot execute.
+Both stages need `TRITON_LIBCUDA_PATH` and `TRITON_PTXAS_PATH` on NixOS, which the flake sets.

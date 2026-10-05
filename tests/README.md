@@ -1,36 +1,22 @@
 # tests
 
-Fast by construction. The default run is under a second, because almost everything uses a tiny
-random model or a hand-built record rather than real weights and real downloads.
-
-## Layout
+Fast by construction: the default run takes seconds, because almost everything uses a tiny random model or a hand-built record rather than real weights and downloads.
 
 ```
-conftest.py    tiny_config, a fixed batch, and the backbone path fixture
-data/          coordinate primitives, schema validation, one case per adapter
-model/         the graft, weight init, and box-to-subword alignment
-train/         the MVLM collator and the parameter grouping
+conftest.py     tiny_config, a fixed batch, the backbone path fixture
+test_data.py    schema and coordinate primitives, one case per adapter, the contamination filter
+test_model.py   the graft, weight init, box-to-subword alignment, the pretrain to fine-tune handoff
+test_eval.py    entity F1 over stitched chunks, SROIE field Hmean
+test_train.py   packing, the MLM collator, parameter groups, checkpoint keeping
 ```
-
-## Running
 
 ```sh
-uv run pytest                       # the default, seconds
-uv run pytest -m "slow or gpu"      # the heavy ones, currently none
+uv run pytest                    # the default, seconds
+uv run pytest -m "slow or gpu"   # the heavy ones, currently none
 ```
 
-Tests needing the pulled ModernBERT backbone skip themselves when it is absent rather than failing,
-so a fresh clone still runs green.
+Tests needing the pulled ModernBERT backbone skip themselves when it is absent.
 
-## What these tests are actually for
-
-Every failure mode in this project is quiet. Boxes misaligned by one word, a label scheme read with
-`O` in the wrong slot, a dataset column pruned before it reaches the model: each of them trains
-without complaint, shows a falling loss, and yields a number that means nothing.
-
-So the tests assert correspondences rather than shapes. `test_every_subword_inherits_its_word_box`
-checks which box each subword got, not that the tensor is the right size.
-`test_zero_init_matches_modernbert` and `test_real_backbone_zero_init_parity` demand bit-identical
-logits against plain ModernBERT, which is what proves the surgery did no damage.
-`test_boxes_survive_collation` and `test_head_signature_exposes_bbox` guard the two independent
-routes by which the boxes can silently vanish.
+Every failure mode here is quiet: boxes shifted by one word, `O` in the wrong label slot, a column pruned before the model sees it.
+Each trains without complaint and yields a meaningless number, so the tests assert correspondences rather than shapes.
+`test_zero_init_matches_modernbert` and `test_real_backbone_zero_init_parity` demand bit-identical logits against plain ModernBERT, and `test_boxes_survive_collation` and `test_head_signature_exposes_bbox` guard the two routes by which the boxes can vanish.

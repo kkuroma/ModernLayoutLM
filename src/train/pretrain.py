@@ -1,31 +1,47 @@
 """
-Layout-aware masked language modelling, the stage that trains the layout tables
+Layout-aware masked language modeling, the stage that trains the zero-initialized layout tables
 
-Fine-tuning alone leaves the zero-initialized tables with too few documents to learn from
-Text is masked and boxes are left untouched, so recovering a token rewards reading its position
+Text is masked and boxes are left intact, so recovering a token rewards reading its position
+The layout tables train at their own rate and without decay, which would pull them back to zero
 """
 
 from __future__ import annotations
 
 import json
 import logging
+import shutil
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any, cast
 
-from datasets import Dataset, concatenate_datasets
-from transformers import AutoTokenizer, Trainer, TrainingArguments
+import torch.multiprocessing
+from datasets import Dataset
+from torch import nn
+from torch.optim import AdamW
+from transformers import (
+    AutoTokenizer,
+    Trainer,
+    TrainerCallback,
+    TrainerControl,
+    TrainerState,
+    TrainingArguments,
+)
 
 from src.config import PretrainConfig
 from src.model import ModernLayoutLmConfig, ModernLayoutLmForMaskedLM, ModernLayoutLmProcessor
-from src.train.collator import LayoutMlmCollator
-from src.train.encoding import build_packed_corpus, load_split, tokenize_split
-from src.train.optimizer import build_param_groups, describe_param_groups
+from src.model.modeling_modernlayoutlm import LayoutEmbedding
+from src.train.batches import LayoutMlmCollator, build_packed_corpus
 
 logger = logging.getLogger(__name__)
 
 # Hold out a small slice as the shipped validation splits are tens of thousands of pages
 EVAL_PAGES = 2000
+
+# Biases and norm weights conventionally escape weight decay
+NO_DECAY_SUFFIXES = ("bias", "norm.weight", "LayerNorm.weight")
+
+# What a kept checkpoint needs to be fine-tuned from, leaving the optimizer state behind
+KEPT_FILES = ("config.json", "model.safetensors", "tokenizer.json", "tokenizer_config.json")
 
 
 @dataclass
@@ -35,8 +51,8 @@ class PretrainResult:
 
     Args:
         output_dir: Where the final weights were written.
-        train_sequences: Chunks in the training set after tokenization.
-        eval_sequences: Chunks held back for validation.
+        train_sequences: Sequences in the training set.
+        eval_sequences: Sequences held back for validation.
         metrics: Final validation metrics.
         history: Per-log-step snapshots, for plotting the loss curve.
     """
@@ -47,15 +63,152 @@ class PretrainResult:
     metrics: dict[str, float]
     history: list[dict[str, Any]] = field(default_factory=list)
 
-    def summary(self) -> str:
-        """
-        Renders the headline numbers on one line
 
-        Returns:
-            A printable string.
-        """
-        scores = "  ".join(f"{key}={value:.4f}" for key, value in sorted(self.metrics.items()))
-        return f"pretrain: {self.train_sequences} train chunks  {scores}"
+class KeepCheckpoints(TrainerCallback):
+    """
+    Copies the weights of every `every`th step aside, beyond the reach of checkpoint rotation
+
+    Args:
+        every: Step interval, a multiple of the save interval, or 0 to keep nothing.
+    """
+
+    def __init__(self, every: int) -> None:
+        self.every = every
+
+    def on_save(
+        self, args: TrainingArguments, state: TrainerState, control: TrainerControl, **_: Any
+    ) -> None:
+        if not self.every or state.global_step % self.every:
+            return
+        root = Path(cast(str, args.output_dir))
+        source = root / f"checkpoint-{state.global_step}"
+        target = root / "kept" / source.name
+        target.mkdir(parents=True, exist_ok=True)
+        for name in KEPT_FILES:
+            shutil.copy2(source / name, target / name)
+        logger.info("kept %s", target)
+
+
+def param_groups(
+    model: nn.Module, learning_rate: float, layout_learning_rate: float, weight_decay: float
+) -> list[dict[str, Any]]:
+    """
+    Splits parameters into layout, decayed backbone and undecayed backbone groups for AdamW
+
+    Layout tables are found by module type, so renaming one cannot drop it into the backbone.
+
+    Args:
+        model: The model to optimize.
+        learning_rate: Rate for the pretrained backbone.
+        layout_learning_rate: Rate for the layout tables.
+        weight_decay: Decay for the backbone weights that take it.
+
+    Returns:
+        Non-empty parameter groups, each carrying a `name` for logging.
+
+    Raises:
+        ValueError: If the model has no layout tables, which means the wrong class was built.
+    """
+    layout = {
+        f"{prefix}.{name}" if prefix else name
+        for prefix, module in model.named_modules()
+        if isinstance(module, LayoutEmbedding)
+        for name, _ in module.named_parameters(recurse=False)
+    }
+    if not layout:
+        raise ValueError("This model has no LayoutEmbedding tables, so there is nothing to graft")
+    buckets: dict[str, list[nn.Parameter]] = {"layout": [], "backbone": [], "no_decay": []}
+    for name, parameter in model.named_parameters():
+        if parameter.requires_grad:
+            bucket = "no_decay" if name.endswith(NO_DECAY_SUFFIXES) else "backbone"
+            buckets["layout" if name in layout else bucket].append(parameter)
+    rates = {
+        "layout": (layout_learning_rate, 0.0),
+        "backbone": (learning_rate, weight_decay),
+        "no_decay": (learning_rate, 0.0),
+    }
+    return [
+        {"params": params, "lr": rates[name][0], "weight_decay": rates[name][1], "name": name}
+        for name, params in buckets.items()
+        if params
+    ]
+
+
+def adamw(groups: list[dict[str, Any]], fused: bool = True) -> AdamW:
+    """
+    Builds AdamW and logs its groups, the cheapest check that the graft happened
+
+    Args:
+        groups: Parameter groups carrying their own rate, decay and name.
+        fused: Use the fused kernel, which matches the foreach one only to rounding.
+
+    Returns:
+        The optimizer.
+    """
+    for group in groups:
+        count = sum(parameter.numel() for parameter in group["params"])
+        logger.info(
+            "  %-9s %3d tensors %12s params  lr %g  wd %g",
+            group["name"],
+            len(group["params"]),
+            f"{count:,}",
+            group["lr"],
+            group["weight_decay"],
+        )
+    return AdamW([{k: v for k, v in g.items() if k != "name"} for g in groups], fused=fused)
+
+
+def corpus(
+    processor: ModernLayoutLmProcessor,
+    datasets: list[str],
+    config: PretrainConfig,
+    processed_dir: Path,
+    pack_dir: Path,
+    num_proc: int | None = None,
+    max_pages: int | None = None,
+    seed: int = 42,
+) -> tuple[Dataset, Dataset]:
+    """
+    Packs the pretraining corpora into train and validation sets, cached in `pack_dir`
+
+    Args:
+        processor: The processor to encode with.
+        datasets: Processed corpus names, in mixing order.
+        config: Pretraining hyperparameters, supplying the sequence length and page cap.
+        processed_dir: Root of the processed tree.
+        pack_dir: Where the packed sets are cached.
+        num_proc: Worker processes for tokenization.
+        max_pages: Cap on training pages per corpus, overriding `config.max_pages_per_source`.
+        seed: Seed for the page subsample and the training shuffle.
+
+    Returns:
+        The shuffled training set and the validation set.
+
+    Raises:
+        ValueError: If `datasets` is empty.
+    """
+    if not datasets:
+        raise ValueError("Pretraining needs at least one corpus")
+    caps = {
+        "train": max_pages if max_pages is not None else config.max_pages_per_source,
+        "validation": EVAL_PAGES // len(datasets),
+    }
+    built = {
+        split: build_packed_corpus(
+            processed_dir,
+            datasets,
+            split,
+            processor,
+            config.max_length,
+            pack_dir,
+            num_proc,
+            cap,
+            seed,
+            config.pack_rows,
+        )
+        for split, cap in caps.items()
+    }
+    return built["train"].shuffle(seed=seed), built["validation"]
 
 
 def pretrain(
@@ -63,139 +216,99 @@ def pretrain(
     datasets: list[str],
     config: PretrainConfig,
     processed_dir: Path,
+    pack_dir: Path,
     output_dir: Path,
     seed: int = 42,
     num_proc: int | None = None,
     max_pages: int | None = None,
     max_steps: int | None = None,
     resume: bool = False,
-    pack: bool = True,
-    attn_implementation: str = "flash_attention_2",
+    attn_implementation: str = "flex_attention",
 ) -> PretrainResult:
     """
-    Runs layout-aware MLM over one or more pretraining corpora
+    Runs one phase of layout-aware MLM with fp32 master weights under bf16 autocast
+
+    bf16 master weights cost 18 F1 on FUNSD while the loss looked fine, so the weights stay fp32.
 
     Args:
-        backbone: Path or hub id of the ModernBERT weights to graft onto.
-        datasets: Processed corpus names to concatenate, such as pubtables and doclaynet.
+        backbone: ModernBERT weights to graft onto, or a ModernLayoutLM checkpoint to continue.
+        datasets: Processed corpus names to concatenate.
         config: Pretraining hyperparameters.
         processed_dir: Root of the processed dataset tree.
-        output_dir: Where to write checkpoints and the final weights.
+        pack_dir: Where the packed sets are cached.
+        output_dir: Where checkpoints and the final weights go.
         seed: Random seed.
         num_proc: Worker processes for tokenization.
         max_pages: Cap on pages per corpus, overriding `config.max_pages_per_source`.
-        max_steps: Cap on optimizer steps, for a throughput probe.
-        resume: Continue from the newest checkpoint in `output_dir` when one exists. A multi-day
-            run will be interrupted, and without this an interruption costs the whole run.
-        pack: Concatenate pages into full sequences instead of padding each one. At 1024 tokens a
-            typical page fills barely a third of the window, so this is close to a 2x saving.
-        attn_implementation: "flash_attention_2" takes the sliding window as a kernel parameter
-            rather than a materialized mask, which is what SDPA could not do. Measured at 1.9x on
-            the forward pass at 8192 tokens.
+        max_steps: Optimizer steps in place of `config.steps`, for a probe.
+        resume: Continue from the newest complete checkpoint in `output_dir`, if any.
+        attn_implementation: "flex_attention" compiles the sliding window into its kernel.
 
     Returns:
-        The run's result.
-
-    Raises:
-        ValueError: If `datasets` is empty.
+        The run's result, also written to `output_dir / "pretrain_result.json"`.
     """
-    if not datasets:
-        raise ValueError("Pretraining needs at least one corpus")
-
-    if max_pages is None:
-        max_pages = config.max_pages_per_source
-
     tokenizer = AutoTokenizer.from_pretrained(backbone)
     processor = ModernLayoutLmProcessor(tokenizer=tokenizer)
-
-    if pack:
-        cache = processed_dir.parent / "packed"
-        train_dataset = build_packed_corpus(
-            processed_dir,
-            datasets,
-            "train",
-            processor,
-            config.max_length,
-            cache,
-            num_proc,
-            max_pages,
-            seed,
-        ).shuffle(seed=seed)
-        eval_dataset = build_packed_corpus(
-            processed_dir,
-            datasets,
-            "validation",
-            processor,
-            config.max_length,
-            cache,
-            num_proc,
-            EVAL_PAGES // len(datasets),
-            seed,
-        )
-    else:
-        train_parts = [
-            _encode(processed_dir, n, "train", processor, config, num_proc, max_pages, seed)
-            for n in datasets
-        ]
-        eval_parts = [
-            _encode(
-                processed_dir,
-                n,
-                "validation",
-                processor,
-                config,
-                num_proc,
-                EVAL_PAGES // len(datasets),
-                seed,
-            )
-            for n in datasets
-        ]
-        train_dataset = _merge(train_parts).shuffle(seed=seed)
-        eval_dataset = _merge(eval_parts)
-    logger.info("train chunks %d, eval chunks %d", len(train_dataset), len(eval_dataset))
+    train, validation = corpus(
+        processor, datasets, config, processed_dir, pack_dir, num_proc, max_pages, seed
+    )
+    logger.info("train sequences %d, eval sequences %d", len(train), len(validation))
 
     model_config = ModernLayoutLmConfig.from_pretrained(
         backbone, reference_compile=False, attn_implementation=attn_implementation
     )
-    # Keep weights at FP32 as BF16 masters cost 18 F1 on FUNSD
-    # Autocast still feeds flash-attn the BF16 inputs it needs
     model = ModernLayoutLmForMaskedLM.from_pretrained(backbone, config=model_config)
-    logger.info("attention: %s | packing: %s", model.config._attn_implementation, pack)
-    groups = build_param_groups(
-        model=model,
-        learning_rate=config.learning_rate,
-        layout_learning_rate=config.layout_learning_rate,
-        weight_decay=config.weight_decay,
+    # Score masked tokens only, set on the instance so every saved config keeps dense logits
+    model.sparse_prediction = True
+    groups = param_groups(
+        model, config.learning_rate, config.layout_learning_rate, config.weight_decay
     )
-    logger.info("parameter groups:\n%s", describe_param_groups(groups))
 
+    # Python 3.14 starts workers by forkserver, and each would re-read every pack shard from disk
+    torch.multiprocessing.set_start_method("fork", force=True)
     trainer = Trainer(
         model=model,
-        args=_training_args(config, output_dir, seed, max_steps),
-        train_dataset=cast(Any, train_dataset),
-        eval_dataset=cast(Any, eval_dataset),
-        data_collator=LayoutMlmCollator(
-            tokenizer=tokenizer,
-            mlm_probability=config.mlm_probability,
+        args=TrainingArguments(
+            output_dir=str(output_dir),
+            per_device_train_batch_size=config.batch_size,
+            per_device_eval_batch_size=config.batch_size * 2,
+            gradient_accumulation_steps=config.grad_accum,
+            max_steps=max_steps if max_steps is not None else config.steps,
+            warmup_ratio=config.warmup_ratio,
+            bf16=True,
+            torch_compile=True,
+            logging_steps=100,
+            eval_strategy="steps",
+            eval_steps=2000,
+            save_strategy="steps",
+            save_steps=2000,
+            save_total_limit=config.save_total_limit,
+            dataloader_num_workers=4,
+            # Spawned once, so an edit to src mid-run never reaches a worker
+            dataloader_persistent_workers=True,
+            seed=seed,
+            report_to=[],
+            # The collator builds the batch, so Trainer must not prune bbox out of the dataset
+            remove_unused_columns=False,
         ),
-        optimizers=(_adamw(groups), None),
+        train_dataset=cast(Any, train),
+        eval_dataset=cast(Any, validation),
+        data_collator=LayoutMlmCollator(tokenizer, config.mlm_probability),
+        optimizers=(adamw(groups), None),
+        callbacks=[KeepCheckpoints(config.keep_every)],
     )
     checkpoint = _latest_checkpoint(output_dir) if resume else None
-    if resume and checkpoint is None:
-        logger.warning("resume requested but no checkpoint under %s; starting fresh", output_dir)
-    if checkpoint is not None:
-        logger.info("resuming from %s", checkpoint)
+    logger.info("starting from %s", checkpoint or backbone)
     trainer.train(resume_from_checkpoint=checkpoint)
-    metrics = trainer.evaluate(cast(Any, eval_dataset))
+    metrics = trainer.evaluate(cast(Any, validation))
 
     trainer.save_model(str(output_dir))
     tokenizer.save_pretrained(str(output_dir))
     processor.save_pretrained(str(output_dir))
-
     result = PretrainResult(
         output_dir=str(output_dir),
-        train_sequences=len(train_dataset),
-        eval_sequences=len(eval_dataset),
+        train_sequences=len(train),
+        eval_sequences=len(validation),
         metrics={k.removeprefix("eval_"): v for k, v in metrics.items() if isinstance(v, float)},
         history=list(trainer.state.log_history),
     )
@@ -203,120 +316,9 @@ def pretrain(
     return result
 
 
-def _encode(
-    processed_dir: Path,
-    name: str,
-    split: str,
-    processor: ModernLayoutLmProcessor,
-    config: PretrainConfig,
-    num_proc: int | None,
-    max_pages: int | None,
-    seed: int,
-) -> Dataset:
-    """
-    Loads and tokenizes one corpus split into fixed-length chunks
-
-    Args:
-        processed_dir: Root of the processed tree.
-        name: The corpus name.
-        split: The split name.
-        processor: The processor to encode with.
-        config: Pretraining hyperparameters, supplying the sequence length.
-        num_proc: Worker processes for tokenization.
-        max_pages: Cap on pages to read, or None for all.
-        seed: Seed for the subsample, which is a shuffle rather than a head of the file because
-            the shards are grouped by source.
-
-    Returns:
-        A tokenized dataset of `input_ids`, `attention_mask` and `bbox`.
-    """
-    raw = load_split(processed_dir, name, split)
-    if max_pages is not None and max_pages < len(raw):
-        raw = raw.shuffle(seed=seed).select(range(max_pages))
-    return tokenize_split(
-        dataset=raw,
-        processor=processor,
-        task="pretrain",
-        max_length=config.max_length,
-        num_proc=num_proc,
-    )
-
-
-def _merge(parts: list[Dataset]) -> Dataset:
-    """
-    Concatenates tokenized corpora into one dataset
-
-    Args:
-        parts: Tokenized datasets sharing the same columns.
-
-    Returns:
-        The concatenation, or the single part when there is only one.
-    """
-    return parts[0] if len(parts) == 1 else concatenate_datasets(parts)
-
-
-def _training_args(
-    config: PretrainConfig,
-    output_dir: Path,
-    seed: int,
-    max_steps: int | None,
-) -> TrainingArguments:
-    """
-    Builds the TrainingArguments for the pretraining run
-
-    Args:
-        config: Pretraining hyperparameters.
-        output_dir: Where to write checkpoints and logs.
-        seed: Random seed.
-        max_steps: Cap on optimizer steps, for a throughput probe.
-
-    Returns:
-        Configured TrainingArguments.
-    """
-    return TrainingArguments(
-        output_dir=str(output_dir),
-        per_device_train_batch_size=config.batch_size,
-        per_device_eval_batch_size=config.batch_size * 2,
-        gradient_accumulation_steps=config.grad_accum,
-        num_train_epochs=config.epochs,
-        max_steps=max_steps if max_steps is not None else -1,
-        warmup_ratio=config.warmup_ratio,
-        bf16=True,
-        logging_steps=100,
-        eval_strategy="steps",
-        eval_steps=2000,
-        save_strategy="steps",
-        save_steps=2000,
-        save_total_limit=config.save_total_limit,
-        dataloader_num_workers=4,
-        seed=seed,
-        report_to=[],
-        # The collator builds the batch, so Trainer must not prune bbox out of the dataset first
-        remove_unused_columns=False,
-    )
-
-
-def _adamw(groups: list[dict[str, Any]]) -> Any:
-    """
-    Builds an AdamW optimizer over prepared parameter groups
-
-    Args:
-        groups: Parameter groups carrying their own lr and weight decay.
-
-    Returns:
-        The optimizer.
-    """
-    from torch.optim import AdamW
-
-    return AdamW([{k: v for k, v in group.items() if k != "name"} for group in groups])
-
-
 def _latest_checkpoint(output_dir: Path) -> str | None:
     """
-    Finds the newest usable checkpoint in a run directory
-
-    Checks for the optimizer state rather than just the directory, because a checkpoint
-    interrupted mid-write would otherwise be picked and fail on load.
+    Finds the newest checkpoint that finished writing its optimizer state
 
     Args:
         output_dir: The run's output directory.
@@ -324,14 +326,9 @@ def _latest_checkpoint(output_dir: Path) -> str | None:
     Returns:
         The checkpoint path, or None when there is nothing to resume from.
     """
-    if not output_dir.is_dir():
-        return None
     usable = [
         path
         for path in output_dir.glob("checkpoint-*")
         if (path / "trainer_state.json").is_file() and (path / "optimizer.pt").is_file()
     ]
-    if not usable:
-        return None
-    newest = max(usable, key=lambda path: int(path.name.split("-")[-1]))
-    return str(newest)
+    return str(max(usable, key=lambda path: int(path.name.split("-")[-1]))) if usable else None

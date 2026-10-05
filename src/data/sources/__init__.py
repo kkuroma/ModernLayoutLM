@@ -11,7 +11,7 @@ from collections.abc import Callable, Iterator
 from typing import Protocol
 
 from ..schema import DatasetMeta, Document
-from . import cord, doclaynet, funsd, idl, pdfa, pubtables, rvlcdip, sroie
+from . import cord, doclaynet, funsd, idl, pdfa, pubtables, realkie, sroie
 
 
 class Source(Protocol):
@@ -26,20 +26,22 @@ SOURCES: dict[str, Source] = {
     "funsd": funsd,  # type: ignore[dict-item]
     "cord": cord,  # type: ignore[dict-item]
     "sroie": sroie,  # type: ignore[dict-item]
-    "rvlcdip": rvlcdip,  # type: ignore[dict-item]
     "pubtables": pubtables,  # type: ignore[dict-item]
     "doclaynet": doclaynet,  # type: ignore[dict-item]
     "pdfa": pdfa,  # type: ignore[dict-item]
     "idl": idl,  # type: ignore[dict-item]
+    "idl-fresh": idl.Fresh,  # type: ignore[dict-item]
+    "idl-docs": idl.Docs,  # type: ignore[dict-item]
+    "realkie-fcc": realkie.FCC,
+    "realkie-nda": realkie.NDA,
+    "realkie-charities": realkie.CHARITIES,
 }
 
 # Groups the scripts expose as `--group`, so a caller need not spell out every name
 GROUPS = {
-    "downstream": ["funsd", "cord", "sroie", "rvlcdip"],
-    "token": ["funsd", "cord", "sroie"],
-    "sequence": ["rvlcdip"],
-    "pretrain": ["pubtables", "doclaynet"],
-    "pretrain-wide": ["idl", "pdfa", "pubtables", "rvlcdip", "doclaynet"],
+    "downstream": ["funsd", "cord", "sroie"],
+    "pretrain": ["idl", "pubtables", "pdfa", "doclaynet"],
+    "realkie": ["realkie-fcc", "realkie-nda", "realkie-charities"],
 }
 
 

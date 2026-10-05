@@ -13,8 +13,7 @@ from collections.abc import Iterator
 from pathlib import Path
 from typing import Any
 
-from ..normalize import COORDINATE_SCALE, clamp_box
-from ..schema import DatasetMeta, Document
+from ..schema import COORDINATE_SCALE, DatasetMeta, Document, clamp_box
 
 REPO = "pixparse/pdfa-eng-wds"
 
@@ -26,7 +25,7 @@ TEST_SHARDS = 4
 # OCR confidence below this is usually a misread glyph rather than a word
 MIN_SCORE = 0.5
 
-# A page with almost no extractable text is not worth a training sequence
+# A page with almost no extractable text earns no training sequence
 MIN_WORDS = 8
 
 
@@ -104,8 +103,7 @@ def _read_shard(shard: Path) -> Iterator[Document]:
     """
     Streams one webdataset shard, reading only its JSON members
 
-    A corrupt shard is skipped rather than killing a build that may be part way through millions
-    of pages.
+    A corrupt shard is skipped rather than killing a build millions of pages in.
 
     Args:
         shard: Path to a `.tar` shard.

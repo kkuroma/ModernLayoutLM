@@ -13,6 +13,7 @@ wheels/
 # Data and weights. Anchored with a leading slash, or the pattern also swallows src/data.
 /data
 /models/
+/packed/
 
 # LLM free-for-all
 scratchpad/

@@ -8,9 +8,13 @@ Validation is deliberately fatal as a source producing a misaligned document is 
 from __future__ import annotations
 
 import logging
+from collections import Counter
 from collections.abc import Iterator
-from dataclasses import dataclass
+from concurrent.futures import ProcessPoolExecutor
+from dataclasses import dataclass, field
+from itertools import islice
 from pathlib import Path
+from typing import Any, cast
 
 from .schema import DatasetMeta, Document, write_documents
 from .sources import get_source
@@ -29,14 +33,14 @@ class BuildReport:
     Args:
         source: The dataset name.
         splits: Rows written per split.
-        skipped: Documents the adapter declined to emit, per split.
+        skipped: Documents dropped for having no words, per split.
         label_counts: How often each label id appears, for spotting a collapsed label scheme.
     """
 
     source: str
-    splits: dict[str, int]
-    skipped: dict[str, int]
-    label_counts: dict[int, int]
+    splits: dict[str, int] = field(default_factory=dict)
+    skipped: dict[str, int] = field(default_factory=dict)
+    label_counts: Counter[int] = field(default_factory=Counter)
 
     def summary(self) -> str:
         """
@@ -48,10 +52,10 @@ class BuildReport:
         lines = [f"{self.source}:"]
         for split, count in self.splits.items():
             skipped = self.skipped.get(split, 0)
-            suffix = f", {skipped} skipped" if skipped else ""
-            lines.append(f"  {split}: {count} documents{suffix}")
-        used = len(self.label_counts)
-        lines.append(f"  labels in use: {used}")
+            lines.append(
+                f"  {split}: {count} documents" + (f", {skipped} skipped" if skipped else "")
+            )
+        lines.append(f"  labels in use: {len(self.label_counts)}")
         return "\n".join(lines)
 
 
@@ -60,15 +64,19 @@ def build_source(
     processed_dir: Path,
     cache_dir: Path | None = None,
     limit: int | None = None,
+    workers: int = 1,
 ) -> BuildReport:
     """
     Builds every split of one source into canonical parquet
 
+    A source exposing `parts` and `load_part` builds each part in its own process
+
     Args:
         name: The dataset name, a key of `SOURCES`.
-        processed_dir: Root of the processed tree. Output goes to `processed_dir / name`.
+        processed_dir: Root of the processed tree, with output under `processed_dir / name`.
         cache_dir: Hugging Face cache directory, or None for the default.
-        limit: Stop after this many documents per split. For smoke tests.
+        limit: Stop after this many documents per split for a smoke test, which builds serially.
+        workers: Processes for a source with parts, each holding one part in memory at a time.
 
     Returns:
         A report of what was written.
@@ -79,130 +87,102 @@ def build_source(
     """
     source = get_source(name)
     meta = source.describe()
-    out_dir = processed_dir / name
-
-    splits: dict[str, int] = {}
-    skipped: dict[str, int] = {}
-    label_counts: dict[int, int] = {}
+    report = BuildReport(source=name)
+    parts = getattr(source, "parts", None)
 
     for split in source.SPLITS:
         logger.info("building %s/%s", name, split)
-        documents = source.load(split, cache_dir=str(cache_dir) if cache_dir else None)
-        written, dropped = _write_split(
-            documents=_limited(documents, limit),
-            split_dir=out_dir / split,
-            label_counts=label_counts,
-        )
-        splits[split] = written
-        skipped[split] = dropped
+        split_dir = processed_dir / name / split
+        split_dir.mkdir(parents=True, exist_ok=True)
+        for stale in split_dir.glob("*.parquet"):
+            stale.unlink()
 
-    meta.splits = splits
-    meta.write(out_dir)
-    report = BuildReport(source=name, splits=splits, skipped=skipped, label_counts=label_counts)
+        if workers > 1 and limit is None and parts is not None:
+            jobs = [
+                (name, part, split_dir / f"{index:03d}") for index, part in enumerate(parts(split))
+            ]
+            # A fresh process per part returns each part's memory before the next one loads
+            with ProcessPoolExecutor(workers, max_tasks_per_child=1) as pool:
+                results = list(pool.map(_build_part, jobs))
+        else:
+            documents = source.load(split, cache_dir=str(cache_dir) if cache_dir else None)
+            results = [_write(islice(documents, limit), split_dir / "000")]
+
+        report.splits[split] = sum(written for written, _, _ in results)
+        report.skipped[split] = sum(skipped for _, skipped, _ in results)
+        for _, _, counts in results:
+            report.label_counts.update(counts)
+
+    meta.splits = report.splits
+    meta.write(processed_dir / name)
     _warn_on_collapsed_labels(meta, report)
     return report
 
 
-def _limited(documents: Iterator[Document], limit: int | None) -> Iterator[Document]:
+def _build_part(job: tuple[str, Any, Path]) -> tuple[int, int, Counter[int]]:
     """
-    Truncates a document stream
+    Builds one part of a split inside a worker process
 
     Args:
-        documents: The source stream.
-        limit: Maximum documents to pass through, or None for all.
-
-    Yields:
-        At most `limit` documents.
-    """
-    if limit is None:
-        yield from documents
-        return
-    for index, document in enumerate(documents):
-        if index >= limit:
-            return
-        yield document
-
-
-def _write_split(
-    documents: Iterator[Document],
-    split_dir: Path,
-    label_counts: dict[int, int],
-) -> tuple[int, int]:
-    """
-    Validates and shards one split to parquet
-
-    Args:
-        documents: Canonical documents for this split.
-        split_dir: Directory to write shards into. Cleared of stale shards first.
-        label_counts: Accumulator for label frequency, mutated in place.
+        job: The source name, the part as the source's `parts` listed it, and the file prefix.
 
     Returns:
-        A (written, skipped) pair, where skipped counts documents dropped for being empty.
+        Rows written, documents skipped, and label counts for this part.
+    """
+    name, part, prefix = job
+    return _write(cast(Any, get_source(name)).load_part(part), prefix)
+
+
+def _write(documents: Iterator[Document], prefix: Path) -> tuple[int, int, Counter[int]]:
+    """
+    Validates documents and writes them as numbered parquet files next to `prefix`
+
+    Args:
+        documents: Canonical documents for one split or one part of it.
+        prefix: Path stem the numbered files share, such as `split_dir / "003"`.
+
+    Returns:
+        Rows written, documents skipped for having no words, and label counts.
 
     Raises:
         ValueError: If a document fails its invariants.
     """
-    split_dir.mkdir(parents=True, exist_ok=True)
-    for stale in split_dir.glob("*.parquet"):
-        stale.unlink()
-
-    written = 0
-    skipped = 0
-    shard_index = 0
+    written, skipped, counts = 0, 0, Counter[int]()
     buffer: list[Document] = []
+
+    def flush() -> int:
+        path = prefix.with_name(f"{prefix.name}-{written // SHARD_SIZE:05d}.parquet")
+        return write_documents(buffer, path)
 
     for document in documents:
         if not document.words:
             skipped += 1
             continue
         document.validate()
-        _count_labels(document, label_counts)
+        counts.update(document.word_labels or [])
+        if document.doc_label is not None:
+            counts[document.doc_label] += 1
         buffer.append(document)
-        if len(buffer) >= SHARD_SIZE:
-            written += write_documents(buffer, split_dir / f"{shard_index:05d}.parquet")
-            shard_index += 1
+        if len(buffer) == SHARD_SIZE:
+            written += flush()
             buffer = []
-
     if buffer:
-        written += write_documents(buffer, split_dir / f"{shard_index:05d}.parquet")
-    return written, skipped
-
-
-def _count_labels(document: Document, label_counts: dict[int, int]) -> None:
-    """
-    Adds one document's labels to the running frequency count
-
-    Args:
-        document: The document to count.
-        label_counts: Accumulator, mutated in place.
-    """
-    if document.word_labels is not None:
-        for label in document.word_labels:
-            label_counts[label] = label_counts.get(label, 0) + 1
-    if document.doc_label is not None:
-        label_counts[document.doc_label] = label_counts.get(document.doc_label, 0) + 1
+        written += flush()
+    return written, skipped, counts
 
 
 def _warn_on_collapsed_labels(meta: DatasetMeta, report: BuildReport) -> None:
     """
     Logs a warning when most of the declared label vocabulary never appears
 
-    A label scheme misread at the source shows up here: every word lands on one or two ids while
-    the rest of the vocabulary sits empty. Cheap to check, and it catches the failure that is
-    otherwise invisible until the F1 comes back meaningless.
+    A misread label scheme lands every word on one or two ids, invisible until the F1 is nonsense.
 
     Args:
         meta: The dataset metadata, holding the declared label names.
         report: The build report, holding observed label frequencies.
     """
-    declared = len(meta.label_names)
-    if declared == 0:
-        return
-    used = len(report.label_counts)
+    declared, used = len(meta.label_names), len(report.label_counts)
     if used <= 2 < declared:
         logger.warning(
-            "%s uses only %d of %d declared labels. Check the source label scheme.",
-            meta.source,
-            used,
-            declared,
+            "%s uses %d of %d declared labels, check its scheme", meta.source, used, declared
         )

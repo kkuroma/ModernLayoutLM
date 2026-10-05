@@ -12,8 +12,7 @@ from typing import Any, cast
 
 from datasets import Dataset, load_dataset
 
-from ..normalize import COORDINATE_SCALE, bio_from_runs, clamp_box
-from ..schema import DatasetMeta, Document
+from ..schema import COORDINATE_SCALE, DatasetMeta, Document, bio_from_runs, clamp_box
 
 REPO = "Ssunbell/SROIE_layoutlmv2_sequence"
 SPLITS = {"train": "train", "validation": "val", "test": "test"}

@@ -44,9 +44,8 @@ class LayoutEmbedding(nn.Embedding):
     """
     A coordinate embedding table, marked by its type so weight init can find it
 
-    `_init_weights` is called on leaf modules, not on their container, so an ordinary
-    `nn.Embedding` here would be indistinguishable from the token embedding table and would pick
-    up ModernBERT's default normal init instead of being zeroed.
+    `_init_weights` sees leaf modules, where a plain `nn.Embedding` would pass for the token table.
+    It would then take ModernBERT's default normal init instead of being zeroed.
     """
 
 
@@ -95,10 +94,9 @@ class ModernLayoutLmEmbeddings(ModernBertEmbeddings):
         """
         Looks up and sums the six layout embeddings for each box
 
-        Coordinates are clamped into the table's range, and width and height are derived as
-        `x1 - x0` and `y1 - y0` then clamped at zero, so a malformed box degrades rather than
-        raising. `x0` and `x1` share the X table and `y0` and `y1` share the Y table, matching
-        LayoutLM v1.
+        Coordinates clamp into the table, and a negative width or height clamps to zero.
+        A malformed box therefore degrades rather than raising.
+        `x0` and `x1` share the X table and `y0` and `y1` the Y table, matching LayoutLM v1.
 
         Args:
             bbox: Long tensor of shape (batch, seq_len, 4) holding (x0, y0, x1, y1).
@@ -138,8 +136,7 @@ class ModernLayoutLmEmbeddings(ModernBertEmbeddings):
 
         Args:
             input_ids: Token ids of shape (batch, seq_len).
-            bbox: Boxes of shape (batch, seq_len, 4). None contributes nothing, which makes the
-                model behave as plain ModernBERT.
+            bbox: Boxes of shape (batch, seq_len, 4), or None to behave as plain ModernBERT.
             inputs_embeds: Precomputed token embeddings, used instead of `input_ids`.
 
         Returns:
@@ -168,10 +165,8 @@ class ModernLayoutLmPreTrainedModel(ModernBertPreTrainedModel):
         """
         Initializes a module, adding layout table handling on top of ModernBERT's rules
 
-        Without this the four tables would pick up ModernBERT's default embedding init, which is
-        far too large to add onto a pretrained token embedding. This is also the hook
-        `from_pretrained` calls for keys missing from a ModernBERT checkpoint, which is exactly
-        the four tables, so it is what makes grafting produce a zeroed start.
+        ModernBERT's default init is far too large to add onto a pretrained token embedding.
+        `from_pretrained` calls this for keys a checkpoint lacks, so a graft starts zeroed.
 
         Args:
             module: The module to initialize.
@@ -211,9 +206,8 @@ class ModernLayoutLmModel(ModernLayoutLmPreTrainedModel, ModernBertModel):
     ) -> BaseModelOutput:
         r"""
         bbox (`torch.LongTensor` of shape `(batch_size, sequence_length, 4)`, *optional*):
-            Bounding box of each token as (x0, y0, x1, y1), normalized to
-            `[0, config.coordinate_scale]` with the origin at the top left. Omitting it makes the
-            model behave as plain ModernBERT.
+            Boxes as (x0, y0, x1, y1) on `[0, config.coordinate_scale]`, origin at the top left.
+            Omitting it makes the model behave as plain ModernBERT.
         """
         # Branched rather than written as an xor so that the non-None case is provable
         if inputs_embeds is not None:
@@ -294,9 +288,8 @@ class ModernLayoutLmForMaskedLM(ModernLayoutLmPreTrainedModel, ModernBertForMask
         """
         Runs the encoder and the MLM head
 
-        `bbox` is named explicitly rather than left to `**kwargs` because `Trainer` inspects this
-        signature to decide which dataset columns to keep. Were it implicit, the boxes would be
-        silently dropped before they ever reached the model.
+        `bbox` is named rather than left to `**kwargs`, as `Trainer` prunes columns by signature.
+        Were it implicit, the boxes would be dropped before they ever reached the model.
 
         Args:
             input_ids: Token ids of shape (batch, seq_len).

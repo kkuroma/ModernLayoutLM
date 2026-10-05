@@ -26,12 +26,9 @@ class ModernLayoutLmProcessor(ProcessorMixin):
     Pairs a fast tokenizer with box and label expansion over subwords
 
     Args:
-        tokenizer: Any fast tokenizer. Injected rather than hardcoded so the LayoutLM baseline can
-            reuse this class with `LayoutLMTokenizerFast` over identical data.
+        tokenizer: Any fast tokenizer, so the LayoutLM baseline reuses this with its own one.
         coordinate_scale: The scale boxes are expected to already be normalized to.
-        label_all_subwords: When True every subword of a word carries the word's label. When
-            False only the first subword does and the rest get `IGNORE_INDEX`, which is the
-            convention the published FUNSD and CORD numbers use.
+        label_all_subwords: Label every subword, not only the first as published FUNSD and CORD do.
     """
 
     attributes = ["tokenizer"]
@@ -64,33 +61,27 @@ class ModernLayoutLmProcessor(ProcessorMixin):
         """
         Tokenizes words and aligns boxes, and optionally labels, to the resulting subwords
 
-        Accepts a single document or a batch of them, detected by whether `words` holds strings
-        or lists. Special tokens receive the sentinel boxes defined in this module. When
-        `return_overflowing_tokens` is set, a long page becomes several chunks and the boxes
-        follow each chunk, so no realignment is needed downstream.
+        Accepts one document or a batch, told apart by whether `words` holds strings or lists.
+        Special tokens receive the sentinel boxes defined in this module.
+        With `return_overflowing_tokens` a long page becomes several chunks, each with its boxes.
 
         Args:
             words: One document's words, or a batch of documents' words.
-            boxes: One box per word as (x0, y0, x1, y1), already normalized to
-                `coordinate_scale`, batched to match `words`.
-            word_labels: One class index per word, batched to match `words`. Omit for
-                pretraining and for document classification.
-            max_length: Truncation length. Defaults to the tokenizer's own.
+            boxes: One (x0, y0, x1, y1) box per word on `coordinate_scale`, batched like `words`.
+            word_labels: One class index per word, batched like `words`, or None for no labels.
+            max_length: Truncation length, by default the tokenizer's own.
             padding: Passed to the tokenizer.
             truncation: Passed to the tokenizer.
-            return_overflowing_tokens: Whether to emit every chunk of an over-length document
-                rather than only the first.
+            return_overflowing_tokens: Emit every chunk of an over-length page, not only the first.
             stride: Overlap in tokens between consecutive chunks.
             return_tensors: "pt" for torch tensors, None for lists.
             **kwargs: Forwarded to the tokenizer.
 
         Returns:
-            A BatchEncoding with `input_ids`, `attention_mask`, `bbox`, and `labels` when
-            `word_labels` was given.
+            A BatchEncoding of `input_ids`, `attention_mask`, `bbox`, plus `labels` if given any.
 
         Raises:
-            ValueError: If `words` and `boxes` disagree in length, or a coordinate falls outside
-                `[0, coordinate_scale]`.
+            ValueError: If `words` and `boxes` differ in length, or a coordinate leaves the grid.
         """
         batched = bool(words) and isinstance(words[0], list)
         batch_words: list[list[str]] = words if batched else [words]  # type: ignore[assignment]
@@ -143,8 +134,7 @@ class ModernLayoutLmProcessor(ProcessorMixin):
         """
         Checks that the parallel inputs line up and the coordinates are in range
 
-        Catching this here turns a silent misalignment, which would train a model on wrong boxes
-        without ever erroring, into an immediate failure.
+        A misalignment would otherwise train a model on wrong boxes without ever erroring.
 
         Args:
             batch_words: Words per document.
@@ -205,8 +195,8 @@ class ModernLayoutLmProcessor(ProcessorMixin):
         """
         Chooses a sentinel box for each token that came from no word
 
-        Leading specials anchor the origin as CLS does, the first trailing special takes the far
-        corner as SEP does, and everything past it is padding at the origin.
+        Leading specials sit at the origin like CLS, and the first trailing one at the far corner.
+        Everything past it is padding at the origin.
 
         Args:
             word_ids: Per-token index into the source words, None for non-word tokens.
@@ -239,8 +229,8 @@ class ModernLayoutLmProcessor(ProcessorMixin):
         """
         Assigns a label to every token position in one chunk
 
-        Special and padding tokens always get `IGNORE_INDEX`. Whether the non-first subwords of a
-        word inherit the word's label follows `label_all_subwords`.
+        Special and padding tokens always get `IGNORE_INDEX`.
+        Whether the later subwords of a word inherit its label follows `label_all_subwords`.
 
         Args:
             word_ids: Per-token index into `source_labels`, None for non-word tokens.

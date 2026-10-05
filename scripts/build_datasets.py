@@ -27,6 +27,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--group", help="a named group, such as downstream, token or sequence")
     parser.add_argument("--limit", type=int, help="documents per split, for a smoke test")
     parser.add_argument("--verbose", action="store_true", help="log every split as it builds")
+    parser.add_argument("--workers", type=int, default=1, help="processes for sharded sources")
     return parser.parse_args()
 
 
@@ -55,6 +56,7 @@ def main() -> int:
                 processed_dir=config.paths.processed_dir,
                 cache_dir=cache_dir,
                 limit=args.limit,
+                workers=args.workers,
             )
         except (OSError, ValueError, KeyError, RuntimeError) as exc:
             print(f"FAILED {name}: {type(exc).__name__}: {exc}", file=sys.stderr)

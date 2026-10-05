@@ -13,8 +13,7 @@ from typing import Any, cast
 
 from datasets import Dataset, load_dataset
 
-from ..normalize import normalize_box, quad_to_xyxy
-from ..schema import DatasetMeta, Document
+from ..schema import DatasetMeta, Document, normalize_box, quad_to_xyxy
 
 REPO = "naver-clova-ix/cord-v2"
 SPLITS = {"train": "train", "validation": "validation", "test": "test"}
@@ -91,7 +90,7 @@ def load(split: str, cache_dir: str | None = None) -> Iterator[Document]:
         cache_dir: Hugging Face cache directory, or None for the default.
 
     Yields:
-        One Document per receipt. Receipts whose lines hold no usable words are skipped.
+        One Document per receipt, skipping receipts whose lines hold no usable words.
 
     Raises:
         KeyError: If `split` is not a known split.
@@ -130,8 +129,7 @@ def _build(
         The Document, or None when no line yielded a word.
 
     Raises:
-        ValueError: If a line carries a category absent from `CATEGORIES`. Mapping it to O
-            instead would silently erase an entire field from the training signal.
+        ValueError: If a category is absent from `CATEGORIES`, rather than erase a field as O.
     """
     words: list[str] = []
     boxes: list[list[int]] = []

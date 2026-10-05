@@ -1,14 +1,14 @@
 """
 Typed access to `config.toml`
 
-Scripts load the file once and hand the resulting dataclasses to `src`, so no module inside
-`src` ever reads a path or hyperparameter off disk by itself.
+Scripts load it once and pass the dataclasses in, so nothing in `src` reads config off disk
 """
 
 from __future__ import annotations
 
+import ast
 import tomllib
-from dataclasses import dataclass, field, fields
+from dataclasses import dataclass, field, fields, replace
 from pathlib import Path
 from typing import Any
 
@@ -21,9 +21,9 @@ class Paths:
     Every directory the pipeline reads from or writes to, resolved against the project root
     """
 
-    root: Path
     raw_dir: Path
     processed_dir: Path
+    pack_dir: Path
     checkpoint_dir: Path
     backbone_dir: Path
     export_dir: Path
@@ -31,35 +31,26 @@ class Paths:
 
 
 @dataclass(frozen=True)
-class ModelConfig:
-    """
-    The backbone to graft onto and the geometry of the layout embeddings
-    """
-
-    backbone: str
-    max_2d_position_embeddings: int
-    coordinate_scale: int
-    zero_init_2d: bool
-
-
-@dataclass(frozen=True)
 class PretrainConfig:
     """
-    Hyperparameters for the layout-aware masked language modeling stage
+    Hyperparameters for one phase of the layout-aware masked language modeling stage
     """
 
     datasets: list[str]
     max_length: int
+    steps: int
     mlm_probability: float
     learning_rate: float
     layout_learning_rate: float
     weight_decay: float
     warmup_ratio: float
-    epochs: int
     batch_size: int
     grad_accum: int
     save_total_limit: int
     max_pages_per_source: int | None = None
+    keep_every: int = 0
+    pack_rows: int = 2000
+    pack_workers: int | None = None
 
 
 @dataclass(frozen=True)
@@ -70,6 +61,7 @@ class FinetuneConfig:
 
     max_length: int
     learning_rate: float
+    baseline_learning_rate: float
     layout_learning_rate: float
     weight_decay: float
     warmup_ratio: float
@@ -77,73 +69,43 @@ class FinetuneConfig:
     batch_size: int
     grad_accum: int
     label_all_subwords: bool
-    max_train_pages: int | None = None
 
 
 @dataclass(frozen=True)
 class Config:
     """
     The whole of `config.toml`, plus the per-task fine-tuning overrides
+
+    `pretrain` is the short-window phase, and `pretrain_long` continues it with its own overrides.
     """
 
     paths: Paths
-    model: ModelConfig
     pretrain: PretrainConfig
+    pretrain_long: PretrainConfig
     finetune: FinetuneConfig
     finetune_overrides: dict[str, dict[str, Any]] = field(default_factory=dict)
 
     def finetune_for(self, task: str) -> FinetuneConfig:
         """
-        Returns the fine-tuning config for one task, with that task's overrides applied
-
-        Reads the `[Finetune.<task>]` table and replaces only the keys it declares, so a task
-        table stays a short diff against the shared defaults.
+        Returns the fine-tuning config for one task, with its `[Finetune.<task>]` table applied
 
         Args:
-            task: The dataset name, matching a `[Finetune.<task>]` table.
+            task: The dataset name.
 
         Returns:
-            A new FinetuneConfig. Unrecognised override keys are ignored.
+            A new FinetuneConfig, ignoring override keys it does not recognize.
         """
-        overrides = self.finetune_overrides.get(task, {})
         known = {f.name for f in fields(FinetuneConfig)}
-        merged = {f.name: getattr(self.finetune, f.name) for f in fields(FinetuneConfig)}
-        merged.update({k: v for k, v in overrides.items() if k in known})
-        # `0` reads better than an absent key in the toml, and means "no cap"
-        if not merged.get("max_train_pages"):
-            merged["max_train_pages"] = None
-        return FinetuneConfig(**merged)
-
-
-def find_project_root(start: Path | None = None) -> Path:
-    """
-    Walks upward from `start` until it finds the directory holding `config.toml`
-
-    Args:
-        start: Directory to begin the search from. Defaults to this file's location.
-
-    Returns:
-        The project root directory.
-
-    Raises:
-        FileNotFoundError: If no ancestor directory contains `config.toml`.
-    """
-    current = (start or Path(__file__).resolve().parent).resolve()
-    for candidate in [current, *current.parents]:
-        if (candidate / CONFIG_FILENAME).is_file():
-            return candidate
-    raise FileNotFoundError(f"No {CONFIG_FILENAME} found above {current}")
+        overrides = self.finetune_overrides.get(task, {})
+        return replace(self.finetune, **{k: v for k, v in overrides.items() if k in known})
 
 
 def load_config(path: Path | None = None) -> Config:
     """
-    Reads `config.toml` and returns it as typed dataclasses
-
-    Relative paths in the `[Paths]` table are resolved against the project root, so the
-    `data` symlink and `models` directory work regardless of the current directory.
+    Reads `config.toml` into typed dataclasses, with relative paths resolved against its directory
 
     Args:
-        path: Explicit path to a config file. Defaults to the one at the project root.
+        path: Explicit path to a config file, by default the nearest one above this module.
 
     Returns:
         The parsed Config.
@@ -151,33 +113,40 @@ def load_config(path: Path | None = None) -> Config:
     Raises:
         FileNotFoundError: If no config file can be located.
     """
-    config_path = path.resolve() if path is not None else find_project_root() / CONFIG_FILENAME
-    if not config_path.is_file():
-        raise FileNotFoundError(f"No config file at {config_path}")
-    root = config_path.parent
-
-    with config_path.open("rb") as handle:
+    here = Path(__file__).resolve().parent
+    candidates = (
+        [path] if path is not None else [d / CONFIG_FILENAME for d in (here, *here.parents)]
+    )
+    found = next((c.resolve() for c in candidates if c.is_file()), None)
+    if found is None:
+        raise FileNotFoundError(f"No {CONFIG_FILENAME} found from {path or here}")
+    with found.open("rb") as handle:
         raw = tomllib.load(handle)
-
-    raw_paths = raw["Paths"]
-    paths = Paths(
-        root=root,
-        raw_dir=root / raw_paths["raw_dir"],
-        processed_dir=root / raw_paths["processed_dir"],
-        checkpoint_dir=root / raw_paths["checkpoint_dir"],
-        backbone_dir=root / raw_paths["backbone_dir"],
-        export_dir=root / raw_paths["export_dir"],
-        report_dir=root / raw_paths["report_dir"],
-    )
-
-    raw_finetune = raw["Finetune"]
-    overrides = {k: v for k, v in raw_finetune.items() if isinstance(v, dict)}
-    defaults = {k: v for k, v in raw_finetune.items() if not isinstance(v, dict)}
-
+    finetune = raw["Finetune"]
+    pretrain = PretrainConfig(**{k: v for k, v in raw["Pretrain"].items() if k != "long"})
     return Config(
-        paths=paths,
-        model=ModelConfig(**raw["Model"]),
-        pretrain=PretrainConfig(**raw["Pretrain"]),
-        finetune=FinetuneConfig(**defaults),
-        finetune_overrides=overrides,
+        paths=Paths(**{name: found.parent / value for name, value in raw["Paths"].items()}),
+        pretrain=pretrain,
+        pretrain_long=replace(pretrain, **raw["Pretrain"].get("long", {})),
+        finetune=FinetuneConfig(**{k: v for k, v in finetune.items() if not isinstance(v, dict)}),
+        finetune_overrides={k: v for k, v in finetune.items() if isinstance(v, dict)},
     )
+
+
+def parse_overrides(items: list[str]) -> dict[str, Any]:
+    """
+    Turns command-line `KEY=VALUE` strings into config overrides, parsing values as literals
+
+    Args:
+        items: Strings such as `learning_rate=5e-5` or `epochs=10`.
+
+    Returns:
+        The overrides, with numbers and booleans parsed and anything else kept as a string.
+    """
+    overrides: dict[str, Any] = {}
+    for key, value in (item.split("=", 1) for item in items):
+        try:
+            overrides[key] = ast.literal_eval(value)
+        except ValueError, SyntaxError:
+            overrides[key] = value
+    return overrides

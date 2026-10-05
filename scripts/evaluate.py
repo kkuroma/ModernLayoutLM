@@ -1,7 +1,7 @@
 """
 Collects finished runs into one results table
 
-Reads the result.json each fine-tuning run writes and renders it as markdown and JSON per task
+Reads the result.json each run writes, pooling a cell's seed repeats into a mean and a deviation
 The document is tables only, so a reader draws the comparison rather than being told it
 """
 
@@ -9,6 +9,8 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
+import statistics
 from pathlib import Path
 from typing import Any
 
@@ -22,14 +24,15 @@ COLUMNS = [
     "hmean",
     "field_precision",
     "field_recall",
-    "accuracy",
-    "macro_f1",
     "token_accuracy",
     "loss",
 ]
 
 # Row order, ours first, then the baseline, then the two controls
 VARIANT_ORDER = ["layout", "layoutlm", "skipmlm", "nobbox", "plain"]
+
+# Runs the table is built from, the trailing seed being what marks one
+SEEDED = re.compile(r"-s(\d+)$")
 
 WHAT_EACH_VARIANT_IS = {
     "layout": "ModernLayoutLM: layout-MLM then fine-tune",
@@ -82,41 +85,73 @@ def main() -> int:
 
 def _collect(runs_dir: Path) -> list[dict[str, Any]]:
     """
-    Reads every run result under a directory
+    Reads every seeded run under a directory, pooling the repeats of each cell
+
+    Only directories named task-variant-sSEED are read.
+    Exploratory runs sit beside them under other names, and averaging them in would mix setups.
 
     Args:
         runs_dir: Directory holding one subdirectory per run.
 
     Returns:
-        Run records, each holding the task, variant, metrics and training size.
+        One record per (task, variant), each metric carrying its mean, deviation and seed count.
     """
-    newest: dict[tuple[str, str], tuple[float, dict[str, Any]]] = {}
+    pooled: dict[tuple[str, str], list[dict[str, Any]]] = {}
     for path in sorted(runs_dir.glob("*/result.json")):
+        match = SEEDED.search(path.parent.name)
+        if match is None:
+            continue
         payload = json.loads(path.read_text())
+        payload["seed"] = int(match.group(1))
         spec = payload.get("spec", {})
-        record = {
-            "task": spec.get("task", "unknown"),
-            "variant": _variant(spec),
-            "run_name": spec.get("run_name", path.parent.name),
-            "backbone": spec.get("backbone", ""),
-            "eval_split": payload.get("eval_split", ""),
-            "train_examples": payload.get("train_examples", 0),
-            "metrics": payload.get("metrics", {}),
+        pooled.setdefault((spec.get("task", "unknown"), _variant(spec)), []).append(payload)
+
+    records = []
+    for (task, variant), payloads in pooled.items():
+        payloads.sort(key=lambda payload: payload["seed"])
+        first = payloads[0]
+        records.append(
+            {
+                "task": task,
+                "variant": variant,
+                "seeds": [payload["seed"] for payload in payloads],
+                "backbone": first.get("spec", {}).get("backbone", ""),
+                "eval_split": first.get("eval_split", ""),
+                "train_examples": first.get("train_examples", 0),
+                "metrics": _pool([payload.get("metrics", {}) for payload in payloads]),
+            }
+        )
+    return records
+
+
+def _pool(metrics: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
+    """
+    Averages one cell's seed repeats metric by metric
+
+    Args:
+        metrics: One metric mapping per seed.
+
+    Returns:
+        Metric name to mean, standard deviation and the values pooled, deviation zero at one seed.
+    """
+    names = [name for name in metrics[0] if all(name in entry for entry in metrics)]
+    pooled = {}
+    for name in names:
+        values = [float(entry[name]) for entry in metrics]
+        pooled[name] = {
+            "mean": statistics.mean(values),
+            "std": statistics.stdev(values) if len(values) > 1 else 0.0,
+            "values": values,
         }
-        key = (record["task"], record["variant"])
-        stamp = path.stat().st_mtime
-        if key not in newest or stamp > newest[key][0]:
-            newest[key] = (stamp, record)
-    return [record for _, record in newest.values()]
+    return pooled
 
 
 def _variant(spec: dict[str, Any]) -> str:
     """
     Names the ablation variant a run represents
 
-    The LayoutLM check matches the checkpoint name, not the whole path. This project's directory
-    is called ModernLayoutLM, so a substring test against the full path calls every run a
-    LayoutLM baseline.
+    The LayoutLM check matches the checkpoint name, not the whole path.
+    This project's directory is ModernLayoutLM, so a full-path test calls every run LayoutLM.
 
     Args:
         spec: The run's RunSpec as saved.
@@ -156,8 +191,8 @@ def _render(results: list[dict[str, Any]]) -> str:
         ]
         lines.append(f"## {task}, by variant")
         lines.append("")
-        lines.append("| variant | " + " | ".join(present) + " | train chunks |")
-        lines.append("|---" * (len(present) + 2) + "|")
+        lines.append("| variant | " + " | ".join(present) + " | seeds | train chunks |")
+        lines.append("|---" * (len(present) + 3) + "|")
         ordered = sorted(
             rows,
             key=lambda r: (
@@ -165,15 +200,32 @@ def _render(results: list[dict[str, Any]]) -> str:
             ),
         )
         for record in ordered:
-            cells = [
-                f"{record['metrics'][column]:.4f}" if column in record["metrics"] else "-"
-                for column in present
-            ]
+            cells = [_cell(record["metrics"].get(column)) for column in present]
+            seeds = len(record["seeds"])
             train = record["train_examples"]
-            lines.append(f"| {record['variant']} | " + " | ".join(cells) + f" | {train} |")
+            lines.append(
+                f"| {record['variant']} | " + " | ".join(cells) + f" | {seeds} | {train} |"
+            )
         lines.append("")
 
     return "\n".join(lines)
+
+
+def _cell(pooled: dict[str, Any] | None) -> str:
+    """
+    Renders one pooled metric
+
+    Args:
+        pooled: The metric's mean, deviation and values, or None when the cell lacks it.
+
+    Returns:
+        The mean alone at one seed, mean and deviation beyond that.
+    """
+    if pooled is None:
+        return "-"
+    if len(pooled["values"]) == 1:
+        return f"{pooled['mean']:.4f}"
+    return f"{pooled['mean']:.4f} ± {pooled['std']:.4f}"
 
 
 def _variant_table() -> list[str]:

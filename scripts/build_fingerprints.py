@@ -18,7 +18,7 @@ from huggingface_hub import hf_hub_download
 from src.config import load_config
 from src.data.contamination import Fingerprints, bates_from_filename, page_bates
 
-# Training pages are fair game for pretraining, so only the scored splits count
+# Pretraining may read the training pages, so only the scored splits count
 RVL_EVAL_FILES = ["data/Easy_Test_Data.npy", "data/Easy_Valid_Data.npy"]
 
 # FUNSD ships no separate validation split, so its test split is everything we score on
@@ -73,7 +73,7 @@ def main() -> int:
     fingerprints = Fingerprints(bates)
     written = fingerprints.write(out)
     print(f"\n{len(fingerprints)} fingerprints -> {written}")
-    print("Filtered against by the IDL and RVL-CDIP train adapters.")
+    print("Filtered against by the IDL adapter.")
     print("CORD and SROIE are independent of IIT-CDIP and need no filtering.")
     return 0
 

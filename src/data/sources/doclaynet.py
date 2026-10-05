@@ -13,8 +13,7 @@ from typing import Any
 import pyarrow.parquet as pq
 from huggingface_hub import HfFileSystem
 
-from ..normalize import normalize_box, split_segment
-from ..schema import DatasetMeta, Document
+from ..schema import DatasetMeta, Document, normalize_box, split_segment
 
 REPO = "docling-project/DocLayNet-v1.2"
 GLOB = f"datasets/{REPO}/**/*.parquet"
@@ -28,7 +27,7 @@ COLUMNS = ["pdf_cells", "metadata"]
 # Larger batches mean fewer round trips against the remote file
 BATCH_SIZE = 64
 
-# A page with almost no extractable text is not worth a training sequence
+# A page with almost no extractable text earns no training sequence
 MIN_WORDS = 8
 
 
@@ -58,8 +57,7 @@ def load(split: str, cache_dir: str | None = None) -> Iterator[Document]:
 
     Args:
         split: One of the keys of `SPLITS`.
-        cache_dir: Unused. Reads stream from the hub rather than through the dataset cache,
-            because caching would defeat the column projection that makes this affordable.
+        cache_dir: Unused, as reads stream from the hub to keep the column projection cheap.
 
     Yields:
         One Document per page with enough extractable text.
@@ -90,8 +88,8 @@ def _build(doc_id: str, row: dict[str, Any]) -> Document | None:
     """
     Assembles one page from its pdf_cells
 
-    Cells are flattened out of their annotation groups, deduplicated, and sorted into reading
-    order, because a cell can appear under more than one overlapping region.
+    Cells are flattened out of their groups, deduplicated and sorted into reading order.
+    A cell can appear under more than one overlapping region.
 
     Args:
         doc_id: Identifier for the resulting document.

@@ -21,12 +21,9 @@ class ModernLayoutLmConfig(ModernBertConfig):
     Configuration for a ModernLayoutLM model
 
     Args:
-        max_2d_position_embeddings: Rows in each 2D position embedding table. Coordinates are
-            clamped into `[0, max_2d_position_embeddings - 1]` at lookup time.
-        coordinate_scale: The scale bounding boxes are normalized to before lookup. Recorded on
-            the config so the processor and the model cannot disagree about it.
-        zero_init_2d: Whether to initialize the four layout tables to zero. True makes a freshly
-            grafted model numerically identical to its ModernBERT backbone.
+        max_2d_position_embeddings: Rows per 2D table, which lookups clamp coordinates into.
+        coordinate_scale: The scale boxes are normalized to, kept here so the processor agrees.
+        zero_init_2d: Zero the layout tables, so a fresh graft matches its backbone exactly.
         **kwargs: Forwarded to `ModernBertConfig`.
     """
 

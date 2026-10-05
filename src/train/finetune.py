@@ -1,46 +1,49 @@
 """
-Downstream supervised fine-tuning
+Downstream token-classification fine-tuning, one function for every task and variant via a RunSpec
 
-One function drives every task, with the variant to run expressed as a RunSpec
-That is what makes a control the same code path rather than an approximation of it
+That makes every control the same code path rather than an approximation of it
+The LayoutLM v1 baseline goes through it too, on the same data and the same processor
 """
 
 from __future__ import annotations
 
 import json
 import logging
-from collections.abc import Sequence
 from dataclasses import asdict, dataclass, field, replace
 from pathlib import Path
 from typing import Any, cast
 
 import numpy as np
 from datasets import Dataset
-from transformers import AutoTokenizer, Trainer, TrainingArguments
+from transformers import (
+    AutoTokenizer,
+    LayoutLMForTokenClassification,
+    Trainer,
+    TrainingArguments,
+)
 from transformers.trainer_utils import EvalPrediction
 
 from src.config import FinetuneConfig
 from src.data import DatasetMeta
-from src.eval.fields import FIELD_LEVEL_SOURCES, score_fields
-from src.eval.metrics import (
+from src.eval import (
+    FIELD_LEVEL_SOURCES,
     decode_token_predictions,
-    sequence_metrics,
+    score_fields,
     stitch_chunks,
     token_metrics,
 )
 from src.model import (
     ModernLayoutLmConfig,
-    ModernLayoutLmForSequenceClassification,
     ModernLayoutLmForTokenClassification,
     ModernLayoutLmProcessor,
 )
-from src.train.encoding import SAMPLE_INDEX, load_split, prepare_task_splits
-from src.train.optimizer import build_param_groups, describe_param_groups
+from src.train.batches import SAMPLE_INDEX, load_split, prepare_task_splits
+from src.train.pretrain import adamw, param_groups
 
 logger = logging.getLogger(__name__)
 
-# Which split to score when a dataset has no dedicated validation split
-FALLBACK_EVAL_SPLIT = "test"
+# Learned absolute positions cap LayoutLM v1 at 512 tokens
+LAYOUTLM_MAX_LENGTH = 512
 
 
 @dataclass
@@ -52,30 +55,27 @@ class RunSpec:
         task: The dataset name, such as "funsd".
         backbone: Path or hub id of the weights to start from.
         run_name: Directory-safe name for outputs.
-        use_bbox: When False, boxes are withheld from the model entirely. This is the no-bbox
-            control, and it reduces ModernLayoutLM to plain ModernBERT.
-        tokenizer_name: Tokenizer to use, defaulting to the backbone's own.
+        use_bbox: When False every box is zeroed, the no-bbox control.
     """
 
     task: str
     backbone: str
     run_name: str
     use_bbox: bool = True
-    tokenizer_name: str | None = None
 
 
 @dataclass
 class RunResult:
     """
-    What a fine-tuning run produced
+    What a fine-tuning run produced, written beside it as `result.json`
 
     Args:
         spec: The run that was executed.
         metrics: Final metrics on the evaluation split.
         eval_split: Which split the metrics came from.
-        output_dir: Where the checkpoint and metrics were written.
+        output_dir: Where the weights and metrics were written.
         train_examples: Chunks in the training split after tokenization.
-        history: Per-evaluation metric snapshots, for plotting.
+        history: Per-evaluation metric snapshots.
     """
 
     spec: RunSpec
@@ -87,13 +87,26 @@ class RunResult:
 
     def summary(self) -> str:
         """
-        Renders the headline metrics on one line
+        Renders the run's metrics on one line
 
         Returns:
             A printable string.
         """
         scores = "  ".join(f"{key}={value:.4f}" for key, value in sorted(self.metrics.items()))
         return f"{self.spec.run_name}: {scores}"
+
+
+def is_layoutlm(backbone: str) -> bool:
+    """
+    Reports whether a backbone is the original LayoutLM rather than our graft
+
+    Args:
+        backbone: Path or hub id of the weights.
+
+    Returns:
+        True for a `layoutlm` checkpoint.
+    """
+    return "layoutlm-" in backbone.lower() or backbone.lower().endswith("layoutlm")
 
 
 def finetune(
@@ -105,13 +118,15 @@ def finetune(
     num_proc: int | None = None,
 ) -> RunResult:
     """
-    Fine-tunes one model on one downstream dataset and scores it
+    Fine-tunes one model on one downstream dataset and scores it on validation, else test
+
+    Chunks of a long page are stitched back together before scoring, and SROIE adds field metrics.
 
     Args:
         spec: What to run.
         config: Hyperparameters for this task.
         processed_dir: Root of the processed dataset tree.
-        output_root: Directory to write the run's checkpoint and metrics under.
+        output_root: Directory the run's own directory goes under.
         seed: Random seed.
         num_proc: Worker processes for tokenization.
 
@@ -119,326 +134,163 @@ def finetune(
         The run's result.
 
     Raises:
-        ValueError: If the dataset's task is not supported for fine-tuning.
+        ValueError: If the dataset has no word labels.
     """
-    config = _clamp_length(spec, config)
-    tokenizer = AutoTokenizer.from_pretrained(spec.tokenizer_name or spec.backbone)
+    if is_layoutlm(spec.backbone):
+        config = replace(config, learning_rate=config.baseline_learning_rate)
+    if is_layoutlm(spec.backbone) and config.max_length > LAYOUTLM_MAX_LENGTH:
+        logger.warning("clamping max_length to %d for LayoutLM", LAYOUTLM_MAX_LENGTH)
+        config = replace(config, max_length=LAYOUTLM_MAX_LENGTH)
+    tokenizer = AutoTokenizer.from_pretrained(spec.backbone)
     processor = ModernLayoutLmProcessor(
-        tokenizer=tokenizer,
-        label_all_subwords=config.label_all_subwords,
+        tokenizer=tokenizer, label_all_subwords=config.label_all_subwords
     )
     splits, meta = prepare_task_splits(
-        processed_dir=processed_dir,
-        name=spec.task,
-        processor=processor,
-        max_length=config.max_length,
-        num_proc=num_proc,
-        max_train_pages=config.max_train_pages,
+        processed_dir, spec.task, processor, config.max_length, num_proc=num_proc
     )
-    if meta.task not in {"token", "sequence"}:
-        raise ValueError(f"{spec.task} has task {meta.task!r}, which is not fine-tunable")
-
+    if meta.task != "token":
+        raise ValueError(f"{spec.task} has task {meta.task!r}, not token classification")
     if not spec.use_bbox:
         splits = {name: _zero_boxes(dataset) for name, dataset in splits.items()}
 
-    model = _build_model(spec, meta)
-    groups = _param_groups(model, config)
-    logger.info("parameter groups:\n%s", describe_param_groups(groups))
-
-    eval_split = "validation" if "validation" in splits else FALLBACK_EVAL_SPLIT
-    output_dir = output_root / spec.run_name
-
+    eval_split = "validation" if "validation" in splits else "test"
     scored = splits[eval_split]
-    chunk_pages = list(scored[SAMPLE_INDEX]) if SAMPLE_INDEX in scored.column_names else None
-    # Drop it before the Trainer sees it, since a stray column becomes a forward argument
-    scored = scored.remove_columns([SAMPLE_INDEX]) if chunk_pages is not None else scored
-    words = _eval_words(processed_dir, spec.task, eval_split, meta)
+    pages = list(scored[SAMPLE_INDEX])
+    # A stray column would become a forward argument
+    scored = scored.remove_columns([SAMPLE_INDEX])
+    words = None
+    if meta.source in FIELD_LEVEL_SOURCES:
+        words = [list(page) for page in load_split(processed_dir, spec.task, eval_split)["words"]]
 
+    model = _build_model(spec, meta)
+    output_dir = output_root / spec.run_name
     trainer = Trainer(
         model=model,
-        args=_training_args(config, output_dir, seed),
+        args=TrainingArguments(
+            output_dir=str(output_dir),
+            per_device_train_batch_size=config.batch_size,
+            per_device_eval_batch_size=config.batch_size * 2,
+            gradient_accumulation_steps=config.grad_accum,
+            num_train_epochs=config.epochs,
+            warmup_ratio=config.warmup_ratio,
+            bf16=True,
+            logging_steps=50,
+            eval_strategy="epoch",
+            save_strategy="no",
+            seed=seed,
+            report_to=[],
+            # Pruning must spare bbox, which every head names in its forward signature
+            remove_unused_columns=True,
+        ),
         train_dataset=splits["train"],
         eval_dataset=scored,
-        compute_metrics=_metric_fn(meta, chunk_pages, words),
-        optimizers=(_adamw(groups), None),
+        compute_metrics=_metric_fn(meta, pages, words),
+        # Foreach rather than fused, which the reported results were trained with
+        optimizers=(adamw(_param_groups(model, spec, config), fused=False), None),
     )
     trainer.train()
     metrics = trainer.evaluate(cast(Any, scored))
-    # Save explicitly as intermediate checkpoints are off
     # Ship the processor too or the box convention is a guess
     trainer.save_model(str(output_dir))
     processor.save_pretrained(str(output_dir))
 
     result = RunResult(
         spec=spec,
-        metrics={_strip_prefix(k): v for k, v in metrics.items() if isinstance(v, float)},
+        metrics={k.removeprefix("eval_"): v for k, v in metrics.items() if isinstance(v, float)},
         eval_split=eval_split,
         output_dir=str(output_dir),
         train_examples=len(splits["train"]),
         history=[entry for entry in trainer.state.log_history if "eval_loss" in entry],
     )
-    _write_result(result, output_dir)
+    (output_dir / "result.json").write_text(json.dumps(asdict(result), indent=2) + "\n")
     return result
-
-
-# Clamp for LayoutLM as its learned absolute positions cap at 512
-LAYOUTLM_MAX_LENGTH = 512
-
-
-def _clamp_length(spec: RunSpec, config: FinetuneConfig) -> FinetuneConfig:
-    """
-    Caps the sequence length for a baseline that cannot go as long as ours
-
-    LayoutLM v1 has learned absolute position embeddings and hard-fails past 512 tokens. Rather
-    than let the run crash deep inside the embedding lookup, the length is clamped here and the
-    difference is logged, since it is part of what the comparison is measuring.
-
-    Args:
-        spec: The run being set up.
-        config: The requested hyperparameters.
-
-    Returns:
-        The config, with max_length reduced if the backbone requires it.
-    """
-    if not is_layoutlm_baseline(spec.backbone) or config.max_length <= LAYOUTLM_MAX_LENGTH:
-        return config
-    logger.warning(
-        "clamping max_length %d to %d for the LayoutLM baseline, which cannot go longer",
-        config.max_length,
-        LAYOUTLM_MAX_LENGTH,
-    )
-    return replace(config, max_length=LAYOUTLM_MAX_LENGTH)
-
-
-def is_layoutlm_baseline(backbone: str) -> bool:
-    """
-    Reports whether a backbone is the original LayoutLM rather than our graft
-
-    Args:
-        backbone: Path or hub id of the weights.
-
-    Returns:
-        True when the weights are a `layoutlm` checkpoint.
-    """
-    return "layoutlm-" in backbone.lower() or backbone.lower().endswith("layoutlm")
-
-
-def _param_groups(model: Any, config: FinetuneConfig) -> list[dict[str, Any]]:
-    """
-    Builds parameter groups, tolerating a baseline model that has no layout tables
-
-    `build_param_groups` refuses a model without `LayoutEmbedding` tables on purpose, since that
-    is how a run misconfigured against a plain ModernBERT gets caught. The LayoutLM baseline is
-    the one legitimate exception: its 2D embeddings are pretrained, not freshly grafted, so they
-    belong on the backbone rate anyway.
-
-    Args:
-        model: The model to optimize.
-        config: Hyperparameters for this task.
-
-    Returns:
-        Parameter groups ready for AdamW.
-    """
-    try:
-        return build_param_groups(
-            model=model,
-            learning_rate=config.learning_rate,
-            layout_learning_rate=config.layout_learning_rate,
-            weight_decay=config.weight_decay,
-        )
-    except ValueError:
-        if not is_layoutlm_baseline(str(getattr(model.config, "_name_or_path", ""))):
-            raise
-        decayed = [p for n, p in model.named_parameters() if p.requires_grad and "bias" not in n]
-        undecayed = [p for n, p in model.named_parameters() if p.requires_grad and "bias" in n]
-        return [
-            {
-                "params": decayed,
-                "lr": config.learning_rate,
-                "weight_decay": config.weight_decay,
-                "name": "backbone",
-            },
-            {
-                "params": undecayed,
-                "lr": config.learning_rate,
-                "weight_decay": 0.0,
-                "name": "no_decay",
-            },
-        ]
 
 
 def _build_model(spec: RunSpec, meta: DatasetMeta) -> Any:
     """
-    Constructs the head appropriate to the dataset's task
-
-    A LayoutLM backbone builds transformers' own LayoutLM classes instead of ours. Its forward
-    already accepts `bbox` on the same 0-1000 convention, so the processed data and the processor
-    are shared with our runs, which is what makes the comparison ours rather than cross-paper.
+    Builds a token-classification head, as LayoutLM's own class for the baseline
 
     Args:
         spec: The run being set up.
-        meta: The dataset metadata, supplying the label count and task.
+        meta: The dataset metadata, supplying the label vocabulary.
 
     Returns:
-        An initialized model with a fresh classification head.
+        A model with a fresh classification head.
     """
-    label_kwargs = {
+    labels = {
         "num_labels": len(meta.label_names),
         "id2label": dict(enumerate(meta.label_names)),
         "label2id": {name: index for index, name in enumerate(meta.label_names)},
     }
-    if is_layoutlm_baseline(spec.backbone):
-        return _build_layoutlm(spec, meta, label_kwargs)
-
-    model_config = ModernLayoutLmConfig.from_pretrained(
-        spec.backbone,
-        **label_kwargs,
-        reference_compile=False,  # triton shells out to /sbin/ldconfig, absent on NixOS
-    )
-    head = (
-        ModernLayoutLmForTokenClassification
-        if meta.task == "token"
-        else ModernLayoutLmForSequenceClassification
-    )
-    return head.from_pretrained(spec.backbone, config=model_config)
+    if is_layoutlm(spec.backbone):
+        return LayoutLMForTokenClassification.from_pretrained(spec.backbone, **labels)
+    config = ModernLayoutLmConfig.from_pretrained(spec.backbone, **labels, reference_compile=False)
+    return ModernLayoutLmForTokenClassification.from_pretrained(spec.backbone, config=config)
 
 
-def _build_layoutlm(spec: RunSpec, meta: DatasetMeta, label_kwargs: dict[str, Any]) -> Any:
+def _param_groups(model: Any, spec: RunSpec, config: FinetuneConfig) -> list[dict[str, Any]]:
     """
-    Builds the original LayoutLM with the head this task needs
+    Builds parameter groups, with LayoutLM's pretrained 2D tables on the backbone rate
 
     Args:
-        spec: The run being set up.
-        meta: The dataset metadata.
-        label_kwargs: num_labels and the label maps.
-
-    Returns:
-        An initialized LayoutLM model.
-    """
-    from transformers import (
-        LayoutLMForSequenceClassification,
-        LayoutLMForTokenClassification,
-    )
-
-    head = (
-        LayoutLMForTokenClassification
-        if meta.task == "token"
-        else LayoutLMForSequenceClassification
-    )
-    return head.from_pretrained(spec.backbone, **label_kwargs)
-
-
-def _training_args(config: FinetuneConfig, output_dir: Path, seed: int) -> TrainingArguments:
-    """
-    Builds the TrainingArguments for a downstream run
-
-    Args:
+        model: The model to optimize.
+        spec: The run, which says whether this is the LayoutLM baseline.
         config: Hyperparameters for this task.
-        output_dir: Where to write checkpoints and logs.
-        seed: Random seed.
 
     Returns:
-        Configured TrainingArguments.
+        Parameter groups ready for `adamw`.
     """
-    return TrainingArguments(
-        output_dir=str(output_dir),
-        per_device_train_batch_size=config.batch_size,
-        per_device_eval_batch_size=config.batch_size * 2,
-        gradient_accumulation_steps=config.grad_accum,
-        num_train_epochs=config.epochs,
-        warmup_ratio=config.warmup_ratio,
-        bf16=True,
-        logging_steps=50,
-        eval_strategy="epoch",
-        save_strategy="no",
-        seed=seed,
-        report_to=[],
-        # Assert bbox survives Trainer's column pruning
-        remove_unused_columns=True,
-    )
+    if not is_layoutlm(spec.backbone):
+        return param_groups(
+            model, config.learning_rate, config.layout_learning_rate, config.weight_decay
+        )
+    named = [(n, p) for n, p in model.named_parameters() if p.requires_grad]
+    return [
+        {
+            "params": [p for n, p in named if "bias" not in n],
+            "lr": config.learning_rate,
+            "weight_decay": config.weight_decay,
+            "name": "backbone",
+        },
+        {
+            "params": [p for n, p in named if "bias" in n],
+            "lr": config.learning_rate,
+            "weight_decay": 0.0,
+            "name": "no_decay",
+        },
+    ]
 
 
-def _adamw(groups: list[dict[str, Any]]) -> Any:
+def _metric_fn(meta: DatasetMeta, pages: list[int], words: list[list[str]] | None) -> Any:
     """
-    Builds an AdamW optimizer over prepared parameter groups
+    Builds the compute_metrics callback, entity F1 plus field Hmean for a field-level dataset
 
     Args:
-        groups: Parameter groups carrying their own lr and weight decay.
+        meta: The dataset metadata, supplying the label names.
+        pages: The source page of each evaluation row, in the order Trainer evaluates them.
+        words: The evaluation split's words per page, for a field-level dataset only.
 
     Returns:
-        The optimizer.
-    """
-    from torch.optim import AdamW
-
-    # `name` is ours, for logging, and torch rejects unknown keys
-    clean = [{k: v for k, v in group.items() if k != "name"} for group in groups]
-    return AdamW(clean)
-
-
-def _eval_words(
-    processed_dir: Path,
-    name: str,
-    split: str,
-    meta: DatasetMeta,
-) -> list[list[str]] | None:
-    """
-    Reads the evaluation split's words back, which field-level scoring needs and nothing else does
-
-    Args:
-        processed_dir: Root of the processed tree.
-        name: The dataset name.
-        split: The split being scored.
-        meta: The dataset metadata.
-
-    Returns:
-        One word list per page, or nothing when this dataset is not scored on fields.
-    """
-    if meta.source not in FIELD_LEVEL_SOURCES:
-        return None
-    return [list(page) for page in load_split(processed_dir, name, split)["words"]]
-
-
-def _metric_fn(
-    meta: DatasetMeta,
-    groups: Sequence[int] | None = None,
-    words: Sequence[Sequence[str]] | None = None,
-) -> Any:
-    """
-    Builds the compute_metrics callback for a dataset's task
-
-    Args:
-        meta: The dataset metadata, supplying the task and label names.
-        groups: The source page of each evaluation row, which stitches chunked pages before
-            scoring. The Trainer evaluates in dataset order, so position lines up with the split.
-        words: The evaluation split's words per page, needed only by a field-level dataset.
-
-    Returns:
-        A callable suitable for `Trainer(compute_metrics=...)`.
+        A callable for `Trainer(compute_metrics=...)`.
     """
 
     def compute(prediction: EvalPrediction) -> dict[str, float]:
         """Scores one evaluation pass."""
         logits = prediction.predictions
-        if isinstance(logits, tuple):
-            logits = logits[0]
+        logits = np.asarray(logits[0] if isinstance(logits, tuple) else logits)
         labels = np.asarray(prediction.label_ids)
-        if meta.task != "token":
-            return sequence_metrics(np.asarray(logits), labels)
-
-        scores = token_metrics(np.asarray(logits), labels, meta.label_names, groups)
-        if groups is None or words is None or meta.source not in FIELD_LEVEL_SOURCES:
+        scores = token_metrics(logits, labels, meta.label_names, pages)
+        if words is None:
             return scores
-
-        predicted, truth = decode_token_predictions(np.asarray(logits), labels, meta.label_names)
-        predicted, truth = stitch_chunks(predicted, truth, groups)
-        return scores | score_fields(words, predicted, truth)
+        predicted, truth = decode_token_predictions(logits, labels, meta.label_names)
+        return scores | score_fields(words, *stitch_chunks(predicted, truth, pages))
 
     return compute
 
 
 def _zero_boxes(dataset: Dataset) -> Dataset:
     """
-    Replaces every box with the origin, for the no-bbox control
+    Moves every box to the origin, for the no-bbox control
 
     Args:
         dataset: A tokenized split.
@@ -453,28 +305,3 @@ def _zero_boxes(dataset: Dataset) -> Dataset:
         return batch
 
     return dataset.map(zero, batched=True, desc="zeroing boxes")
-
-
-def _strip_prefix(key: str) -> str:
-    """
-    Removes Trainer's `eval_` prefix from a metric name
-
-    Args:
-        key: The metric name as Trainer reported it.
-
-    Returns:
-        The bare metric name.
-    """
-    return key.removeprefix("eval_")
-
-
-def _write_result(result: RunResult, output_dir: Path) -> None:
-    """
-    Writes a run's metrics beside its checkpoint
-
-    Args:
-        result: The finished run.
-        output_dir: The run's output directory.
-    """
-    output_dir.mkdir(parents=True, exist_ok=True)
-    (output_dir / "result.json").write_text(json.dumps(asdict(result), indent=2) + "\n")
