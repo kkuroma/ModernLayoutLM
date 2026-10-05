@@ -55,8 +55,6 @@ ignore = ["ANN401"]
 
 [tool.ruff.lint.per-file-ignores]
 "tests/**" = ["ANN"]
-# The model card keeps one sentence per line
-"scripts/export.py" = ["E501"]
 "scratchpad/**" = ["ALL"]
 
 [tool.black]

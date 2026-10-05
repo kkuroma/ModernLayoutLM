@@ -107,8 +107,8 @@ uv run python scripts/export.py --push owner/name --dry-run
 ```
 
 The shipped run did 52 sequences per second at length 512, over 1.91M packed sequences in 10.1 hours.
-Compile, flex attention, masked-only MLM scoring, fused AdamW and micro-batch 32 now reach 104, measured in `data/notes/speedup-2026-09-30.md` and shown there to train the same model.
-Investigation write-ups from the scratchpad, such as the August findings and the bf16 diagnosis, are kept in `data/notes/`.
+Compile, flex attention, masked-only MLM scoring, fused AdamW and micro-batch 32 now reach 104, and `notes.md` shows they train the same model.
+`notes.md` collects every fact the project has established, newest first, so a new finding gets an entry there.
 Probe before committing to a long run, and monitor it every 30 minutes per the manual rather than watching it.
 
 ## Status
@@ -128,10 +128,10 @@ And LayoutLM v1 runs at `baseline_learning_rate`, which `finetune` swaps in for 
 The `fp32` root and four fine-tuned examples keep their tensors; every other run keeps its `config.json` and its `result.json` or `pretrain_result.json` and nothing else, so no deleted run can be re-scored without retraining it.
 `data/checkpoints/CLEANUP-2026-08-19.md` lists what went.
 
-### Before publishing
+### Publishing
 
-The card in `scripts/export.py` and the export in `data/exports/ModernLayoutLM-base-mlm` carry the 11M-page weights and the four-task table, with each model's rate and each task's split, as of 2026-10-04.
-Pushing needs `HF_TOKEN` with write access and a repository name.
+The hub card is `README.md` up to its Reproducing section, so the README is the one place to edit it.
+`data/exports/ModernLayoutLM-base-mlm` carries the 11M-page `fp32` weights and goes to `kkuroma/ModernLayoutLM`, pushed with the `hf auth login` token.
 Per-model validation sweeps were dropped, decided 2026-10-02, as the precision they buy sits below FUNSD's seed noise.
 
 ### The 11M-page checkpoint

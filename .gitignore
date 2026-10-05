@@ -10,6 +10,13 @@ wheels/
 .venv
 .direnv/
 
+# Tool caches and editor state
+.ruff_cache/
+.pytest_cache/
+.import_linter_cache/
+.vscode/
+.claude/
+
 # Data and weights. Anchored with a leading slash, or the pattern also swallows src/data.
 /data
 /models/

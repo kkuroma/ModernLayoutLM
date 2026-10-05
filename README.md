@@ -9,7 +9,7 @@ The model is a pre-trained checkpoint that can be fine-tuned to layout understan
 ```python
 from transformers import AutoModelForMaskedLM, AutoProcessor
 
-path = "data/exports/ModernLayoutLM-base-mlm"
+path = "kkuroma/ModernLayoutLM"
 model = AutoModelForMaskedLM.from_pretrained(path, trust_remote_code=True)
 processor = AutoProcessor.from_pretrained(path, trust_remote_code=True)
 
@@ -156,6 +156,7 @@ scripts/        runnable entrypoints, one per job
 tests/          fast by construction
 notebooks/      results/ holds the tables scripts/evaluate.py writes
 config.toml     every path and hyperparameter
+notes.md        facts found along the way, newest first
 ```
 
 See `src/README.md` and `scripts/README.md` for the module trees.
@@ -193,5 +194,5 @@ uv run python scripts/export.py --checkpoint data/checkpoints/fp32
 uv run python scripts/export.py --push owner/name
 ```
 
-`scripts/export.py` writes the export with its own card, the three model modules and the license, then reloads it in a cold process and requires bit-identical logits before it exits 0.
+`scripts/export.py` writes the export with this README up to Reproducing as its card, then reloads it in a cold process and requires bit-identical logits before it exits 0.
 The per-metric tables are in `notebooks/results/results.md`.
