@@ -1,5 +1,7 @@
 # ModernLayoutLM
 
+![Fine-tuned score and document length per task, for ModernLayoutLM, LayoutLMv1 and ModernBERT](performance.png)
+
 ModernLayoutLM is an attempt to produce a long-context (like ModernBERT) bidirectional encoder that incorporates layout information into its training (like LayoutLM). ModernLayoutLM uses the same recipe as Xu et al. (2020) in the creation of LayoutLMv1, where the major difference is swapping BERT with ModernBERT (Warner et al., 2024).
 
 ## Intended use
@@ -60,7 +62,7 @@ ModernLayoutLM is pretrained with the masked visual-language model of LayoutLMv1
 
 ### FUNSD
 
-- Source: Jaume et al. (2019), read from `nielsr/funsd-layoutlmv3`
+- Source: Jaume et al. (2019), read from `nielsr/funsd`
 - Released: 2019
 - Size: 199 scanned forms, 149 train and 50 test
 - Task: entity labeling over header, question and answer, as 7 BIO labels
@@ -79,6 +81,19 @@ ModernLayoutLM is pretrained with the masked visual-language model of LayoutLMv1
 - Size: 973 receipts, 594 train, 32 validation and 347 test
 - Task: key information extraction over company, date, address and total, as 9 BIO labels
 
+### RealKIE
+
+- Source: Townsend et al. (2024), the FCC Invoices, NDA and Charities sets, read from the Zenodo release with its own OCR
+- Released: 2024
+- Size: long multi-page documents, 38% to 55% of them past 4096 tokens
+- Task: key information extraction labeled as character spans over the OCR text
+
+| set | train, validation and test documents | fields | BIO labels | median tokens |
+|---|---|---|---|---|
+| FCC Invoices | 221, 75 and 74 | 11 | 23 | 2,948 |
+| NDA | 248, 93 and 98 | 3 | 7 | 3,522 |
+| Charities | 322, 108 and 108 | 28 | 57 | 4,525 |
+
 ### Results
 
 Each column is one model fine-tuned on identical data.
@@ -92,11 +107,11 @@ Each column is one model fine-tuned on identical data.
 | setting | value |
 |---|---|
 | metric | entity F1, and field-level Hmean per ICDAR task 3 on SROIE |
-| seeds | mean ± standard deviation over three seeds |
+| seeds | mean ± standard deviation over three seeds, one seed on RealKIE |
 | split | FUNSD on test as it has no validation split, the rest on validation |
 | learning rate | 3e-4, chosen on FUNSD test, and 5e-5 for LayoutLMv1 as in its paper |
-| epochs | 30 |
-| window | 1024 tokens, 512 for LayoutLMv1 as its positions cap there |
+| epochs | 30, 10 on RealKIE |
+| window | 1024 tokens, 4096 on RealKIE, 512 for LayoutLMv1 as its positions cap there |
 | long documents | chunks are stitched back into one document before scoring |
 
 | dataset | ModernLayoutLM | LayoutLMv1 | ModernLayoutLM (no-pretrain) | ModernLayoutLM (no-bbox) | ModernBERT |
@@ -104,6 +119,9 @@ Each column is one model fine-tuned on identical data.
 | FUNSD | 0.7565 ± 0.0037 | 0.7785 ± 0.0104 | 0.5939 ± 0.0205 | 0.3000 ± 0.0247 | 0.5884 ± 0.0082 |
 | CORD | 0.9546 ± 0.0023 | 0.9685 ± 0.0037 | 0.9462 ± 0.0050 | 0.9312 ± 0.0042 | 0.9424 ± 0.0006 |
 | SROIE | 0.9337 ± 0.0060 | 0.9223 ± 0.0199 | 0.8883 ± 0.0121 | 0.8411 ± 0.0189 | 0.8955 ± 0.0072 |
+| RealKIE FCC | 0.8761 | 0.8613 | 0.8569 | 0.7178 | 0.8607 |
+| RealKIE NDA | 0.8586 | 0.8539 | 0.8503 | 0.5735 | 0.8571 |
+| RealKIE Charities | 0.8043 | 0.8071 | 0.7679 | 0.3740 | 0.7725 |
 
 ModernLayoutLM performs comparably to LayoutLMv1, but natively supports long context.
 
@@ -157,6 +175,7 @@ tests/          fast by construction
 notebooks/      results/ holds the tables scripts/evaluate.py writes
 config.toml     every path and hyperparameter
 notes.md        facts found along the way, newest first
+performance.png the figure at the top of this README
 ```
 
 See `src/README.md` and `scripts/README.md` for the module trees.
