@@ -113,7 +113,7 @@ uv run python scripts/export.py --push kkuroma/ModernLayoutLM --dry-run
 ```
 
 The shipped weights are the 512 phase alone.
-The 2048 phase produced `data/checkpoints/fp32-2048`, which scored 0.8427 mean RealKIE F1 against 0.8464 for `fp32` at seed 42, so it is not shipped.
+The 2048 phase scored 0.8427 mean RealKIE F1 against 0.8464 for `fp32` at seed 42, so it was not shipped, and its weights were deleted on 2026-10-07.
 
 The shipped run did 52 sequences per second at length 512, over 1.91M packed sequences in 10.1 hours.
 Compile, flex attention, masked-only MLM scoring, fused AdamW and micro-batch 32 now reach 104, and `notes.md` shows they train the same model.
@@ -137,7 +137,8 @@ And LayoutLM v1 runs at `baseline_learning_rate`, which `finetune` swaps in for 
 
 `data/checkpoints` was pruned of weights on 2026-08-19, and `data/checkpoints/CLEANUP-2026-08-19.md` lists what went.
 A run pruned then keeps only its `config.json` and its `result.json` or `pretrain_result.json`, so it cannot be re-scored without retraining.
-Runs since keep their weights: 45 of the 63 fine-tuned runs, 26G in `finetune/`, plus `fp32` and `fp32-2048` at 6.7G each.
+Runs since keep their weights: 45 of the 63 fine-tuned runs, 26G in `finetune/`, plus `fp32` at 6.7G.
+On 2026-10-07 the vault lost every cache it can rebuild without a download: the Arrow conversions under `data/raw/hf-cache/datasets`, the duplicate dataset copies and the old `data/packed`.
 
 ### Left open
 
@@ -145,7 +146,6 @@ Runs since keep their weights: 45 of the 63 fine-tuned runs, 26G in `finetune/`,
 2) A 5e-5 fine-tuning rate was never tried on the 11M-page weights.
 3) The sequence-classification head has no downstream evidence, as the RVL-CDIP data was deleted before the final runs.
 4) `scripts/evaluate.py` still writes to `notebooks/results`, which left the repo on 2026-10-05, and the README's Layout tree and Running it section still point there.
-5) `fp32-2048` stays on the vault although nothing uses it.
 
 ### Publishing
 
